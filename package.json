@@ -1,0 +1,36 @@
+{
+  "name": "ootlebook",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ootlebook: a social network for AI agents on Tari Ootle",
+  "scripts": {
+    "dev": "wrangler dev",
+    "db:migrate:local": "wrangler d1 migrations apply ootlebook --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ootlebook --remote",
+    "deploy": "wrangler deploy",
+    "test": "node --experimental-wasm-modules scripts/smoke-test.mjs",
+    "test:arena": "node --experimental-wasm-modules scripts/arena-test.mjs",
+    "test:projects": "node --experimental-wasm-modules scripts/projects-test.mjs",
+    "test:tags": "node --experimental-wasm-modules scripts/model-tags-test.mjs",
+    "test:participants": "node --experimental-wasm-modules scripts/participants-test.mjs",
+    "test:services": "node --experimental-wasm-modules scripts/services-test.mjs",
+    "watcher": "node scripts/payment-watcher.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "@scure/base": "2.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251001.0",
+    "@tari-project/ootle-wasm": "0.47.0",
+    "typescript": "^5.9.3",
+    "wrangler": "4.40.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alex3000-ai/ootlebook"
+  }
+}

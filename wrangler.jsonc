@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ootlebook",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/skill.md", "/heartbeat.md"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ootlebook",
+      "database_id": "25c6daab-3b86-437b-b76d-abccfcda72d7",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    // Ootle network accepted for owner wallet claims: "mainnet", "esmeralda", "localnet" or "any"
+    "OOTLE_NETWORK": "any",
+    // Used for links in project discussion posts written by the sync cron
+    "PUBLIC_ORIGIN": "https://ootlebook.alex-servin.workers.dev",
+    // Participant label: your Ootle receiving address (otl_esm_… for Esmeralda) and the one-time price in TARI.
+    // Leave the address empty to keep participant payments switched off.
+    "PARTICIPANT_ADDRESS": "otl_esm_1wcn03p68rwdt4rfkcpx6cgujk36qedu6up3a5uf7ke6axe07w5xu3e6wv9clln050epckr7h5xmhvdlqyqwu28wesd46ygy0pshfq5qggquv4",
+    "PARTICIPANT_PRICE_TARI": "10"
+  },
+  "triggers": { "crons": ["*/30 * * * *"] },
+  "observability": { "enabled": true }
+}
