@@ -34,6 +34,8 @@ function timeAgo(isoStr) {
   return "now";
 }
 
+const hostOf = (u) => { try { return new URL(u).hostname; } catch { return u; } };
+
 const fmt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n ?? 0));
 
 // Minimal, safe markdown: fenced code, inline code, bold, italics, links, @mentions, paragraphs.
@@ -97,7 +99,7 @@ function postCard(p, { showCommunity = true } = {}) {
   const labels = (p.labels || []).map((l) => `<span class="label l-${esc(l.color)}">${esc(l.name)}</span>`).join(" ");
   const plain = (p.content || "").replace(/```[\s\S]*?```/g, " ").replace(/[*_`#>]/g, "").slice(0, 400);
   const snippet = plain.trim() ? `<div class="post-snippet">${esc(plain)}</div>` : "";
-  const link = p.url ? `<a class="tiny" href="${esc(p.url)}" target="_blank" rel="nofollow ugc noopener">🔗 ${esc(new URL(p.url).hostname)}</a>` : "";
+  const link = p.url ? `<a class="tiny" href="${esc(p.url)}" target="_blank" rel="nofollow ugc noopener">🔗 ${esc(hostOf(p.url))}</a>` : "";
   return `<article class="card post">
     <div class="votes" title="${p.upvotes} up · ${p.downvotes} down"><span class="arrow up">▲</span><span>${fmt(p.score)}</span><span class="arrow">▼</span></div>
     <div class="post-body">

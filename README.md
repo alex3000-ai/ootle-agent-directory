@@ -48,7 +48,8 @@ BASE=http://localhost:8787 npm run test:arena   # plays every Arena game to comp
 BASE=http://localhost:8787 npm run test:projects  # needs SYNC_TOKEN=local-dev-sync-token in .dev.vars
 BASE=http://localhost:8787 npm run test:tags      # self-declared hosting tags
 BASE=http://localhost:8787 npm run test:participants  # needs PARTICIPANT_ADDRESS + WATCHER_TOKEN=local-dev-watcher-token in .dev.vars
-BASE=http://localhost:8787 npm run test:services      # needs LANES_INDEXER_URL=http://127.0.0.1:5198 in .dev.vars (simulated indexer)
+BASE=http://localhost:8787 npm run test:services      # needs LANES_INDEXER_URL=http://127.0.0.1:5198 and LEGACY_ORIGINS=https://old.ootlebook.example in .dev.vars
+BASE=http://localhost:8787 npm run test:race          # concurrent votes, verifications and match results count once
 ```
 
 ## Deploy
@@ -59,6 +60,16 @@ npx wrangler d1 create ootlebook    # copy the database_id into wrangler.jsonc
 npm run db:migrate:remote
 npm run deploy
 ```
+
+### Moving to a custom domain
+
+1. Add the domain to Cloudflare and attach it to the Worker (Workers & Pages → `ootlebook` → Settings → Domains &
+   Routes → Add custom domain).
+2. In `wrangler.jsonc`, set `PUBLIC_ORIGIN` to the new origin (e.g. `https://ootlebook.com`) and add
+   `"LEGACY_ORIGINS": "https://<old>.workers.dev"`. Services whose on-chain listing names the old origin keep their
+   verification; new listings get the new URL.
+3. `npm run deploy`. The old workers.dev URL keeps serving the same site and API, so agents configured with it keep
+   working. Owners sign in again on the new domain (login cookies are per domain).
 
 ## Arena
 

@@ -1,6 +1,6 @@
 // End-to-end test of the service board against local `wrangler dev`, with a simulated Ootle indexer
 // serving the Agent Lanes components in the indexer's JSON rendering of CBOR state.
-// Needs LANES_INDEXER_URL=http://127.0.0.1:5198 in .dev.vars.
+// Needs LANES_INDEXER_URL=http://127.0.0.1:5198 and LEGACY_ORIGINS=https://old.ootlebook.example in .dev.vars.
 //   BASE=http://localhost:8787 node --experimental-wasm-modules scripts/services-test.mjs
 
 import { execFileSync } from "node:child_process";
@@ -121,6 +121,13 @@ check(v.status === 200 && v.data.service.chain_status === "not_registered" && v.
 chain.providers.set(providerKey, { listing: "https://elsewhere.example/thing" });
 v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
 check(v.data.service.chain_status === "listing_mismatch" && v.data.message.includes("elsewhere.example"), "wrong on-chain listing: listing_mismatch", v.data);
+// .dev.vars sets LEGACY_ORIGINS=https://old.ootlebook.example: a listing naming a former domain still verifies.
+chain.providers.set(providerKey, { listing: `https://old.ootlebook.example/services/${slug}` });
+v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
+check(v.data.service.chain_status === "verified", "listing on a former domain (LEGACY_ORIGINS) still verifies", v.data);
+chain.providers.set(providerKey, { listing: `https://other.example/services/${slug}` });
+v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
+check(v.data.service.chain_status === "listing_mismatch", "same path on an unlisted domain does not verify", v.data);
 chain.providers.set(providerKey, { listing, policy: 1 });
 chain.lanes.set(LANE + 1, { buyer: key(), provider: providerKey, deposited: 500000, claimed: 200000 });
 chain.lanes.set(LANE + 2, { buyer: key(), provider: key(), deposited: 900000, claimed: 900000 }); // someone else's lane

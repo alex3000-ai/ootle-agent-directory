@@ -112,6 +112,11 @@ export async function readChain(env: LanesEnv): Promise<ChainSnapshot> {
 // ---------------------------------------------------------------------------------------------
 
 export const serviceUrl = (origin: string, slug: string) => `${origin}/services/${slug}`;
+/** Whether an on-chain listing points at this service: at the current origin, or at a former one listed in
+ *  LEGACY_ORIGINS, so moving the site to a new domain doesn't unverify services whose listings name the old one. */
+const listingMatches = (env: LanesEnv, origin: string, listing: string, slug: string) =>
+  [origin, ...(env.LEGACY_ORIGINS ?? "").split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean)]
+    .some((o) => listing === serviceUrl(o, slug));
 // One canonical origin for listings: the cron and request handlers must compare against the same URL.
 const site = (ctx: Ctx) => ctx.env.PUBLIC_ORIGIN || ctx.url.origin;
 
@@ -146,7 +151,7 @@ export async function syncServices(env: LanesEnv, origin: string): Promise<Lanes
 
   for (const s of services) {
     const p = chain.providers.get(s.provider_key);
-    const chainStatus = !p ? "not_registered" : p.banned ? "banned" : p.listing === serviceUrl(origin, s.slug) ? "verified" : "listing_mismatch";
+    const chainStatus = !p ? "not_registered" : p.banned ? "banned" : listingMatches(env, origin, p.listing, s.slug) ? "verified" : "listing_mismatch";
     if (chainStatus === "verified") verified++;
     const firstVerified = chainStatus === "verified" && !s.verified_at;
     stmts.push(env.DB.prepare("UPDATE services SET chain_status = ?, chain_listing = ?, buyer_policy = ?, verified_at = COALESCE(verified_at, ?), checked_at = ? WHERE id = ?")
@@ -162,7 +167,7 @@ export async function syncServices(env: LanesEnv, origin: string): Promise<Lanes
   const owners = new Map<string, Record<string, any>>();
   for (const s of services) {
     const p = chain.providers.get(s.provider_key);
-    if (p && !p.banned && p.listing === serviceUrl(origin, s.slug)) owners.set(s.provider_key, s);
+    if (p && !p.banned && listingMatches(env, origin, p.listing, s.slug)) owners.set(s.provider_key, s);
   }
   const keys = new Set(owners.keys());
   const known = new Set((await env.DB.prepare("SELECT lane_id FROM service_lanes WHERE ledger = ?").bind(ledger).all<{ lane_id: number }>()).results.map((r) => r.lane_id));

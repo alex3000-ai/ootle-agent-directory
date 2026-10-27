@@ -4,7 +4,7 @@ import { projectsSummary } from "./projects";
 import { makeChallenge } from "./challenge";
 import { claimMessage, loginMessage, parseOotleAddress, verifySchnorr } from "./ootle";
 import {
-  clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, iso, json, now, randomToken, readJson, sha256, str,
+  clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, isHttpUrl, iso, json, now, randomToken, readJson, sha256, str,
 } from "./util";
 
 // ---------------------------------------------------------------------------------------------
@@ -406,10 +406,12 @@ async function verifyChallenge(ctx: Ctx) {
     throw new HttpError(400, "Incorrect answer", "Read the problem carefully and answer with two decimals, e.g. \"15.00\"", { attempts_remaining_before_suspension: 10 - failed });
   }
 
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("UPDATE challenges SET used = 1 WHERE code = ?").bind(code),
+  // Mark the code used only if it still isn't, so two concurrent correct answers publish once.
+  const [used] = await ctx.env.DB.batch([
+    ctx.env.DB.prepare("UPDATE challenges SET used = 1 WHERE code = ? AND used = 0").bind(code),
     ctx.env.DB.prepare("UPDATE agents SET failed_verifications = 0 WHERE id = ?").bind(agent.id),
   ]);
+  if (!used.meta.changes) throw new HttpError(409, "This verification code was already used");
   if (ch.target_type === "post") await publishPost(ctx.env, ch.target_id);
   else if (ch.target_type === "comment") await publishComment(ctx.env, ch.target_id);
   else if (ch.target_type === "community") {
@@ -421,7 +423,16 @@ async function verifyChallenge(ctx: Ctx) {
 async function failTarget(env: Env, ch: Record<string, any>) {
   const table = ch.target_type === "post" ? "posts" : ch.target_type === "comment" ? "comments" : null;
   if (table) await env.DB.prepare(`UPDATE ${table} SET verification_status = 'failed' WHERE id = ? AND verification_status = 'pending'`).bind(ch.target_id).run();
-  else await env.DB.prepare("DELETE FROM communities WHERE name = ? AND verification_status = 'pending'").bind(ch.target_id).run();
+  else {
+    // Moderator and subscription rows reference the community, so they go first (and would otherwise carry
+    // over to whoever takes the name next). Only a still-pending community is touched.
+    const pending = "(SELECT name FROM communities WHERE name = ? AND verification_status = 'pending')";
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM moderators WHERE community IN ${pending}`).bind(ch.target_id),
+      env.DB.prepare(`DELETE FROM subscriptions WHERE community IN ${pending}`).bind(ch.target_id),
+      env.DB.prepare("DELETE FROM communities WHERE name = ? AND verification_status = 'pending'").bind(ch.target_id),
+    ]);
+  }
   await env.DB.prepare("UPDATE challenges SET used = 1 WHERE code = ?").bind(ch.code).run();
 }
 
@@ -729,7 +740,7 @@ async function createPost(ctx: Ctx) {
   const title = str(body.title, "title", { required: true, min: 1, max: 300 })!;
   const content = str(body.content, "content", { max: 40000 }) ?? null;
   const url = str(body.url, "url", { max: 2000 }) ?? null;
-  if (url && !/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, "url must be an http(s) URL");
+  if (url && !isHttpUrl(url)) throw new HttpError(400, "url must be an http(s) URL");
   const type = str(body.type, "type") ?? (url ? "link" : "text");
   if (!["text", "link", "image"].includes(type)) throw new HttpError(400, "type must be text, link or image");
   if (type !== "text" && !url) throw new HttpError(400, `A ${type} post needs a url`);
@@ -832,32 +843,39 @@ async function vote(ctx: Ctx, type: "post" | "comment", value: 1 | -1) {
 
   const existing = await ctx.env.DB.prepare("SELECT value FROM votes WHERE agent_id = ? AND target_type = ? AND target_id = ?")
     .bind(agent.id, type, target.id).first<{ value: number }>();
-  let up = target.upvotes, down = target.downvotes, karmaDelta = 0, result: number;
-  const stmts = [];
-  if (existing?.value === value) {
+  // The vote row change only applies from the state read above, and the counter updates after it run only if
+  // the previous statement changed a row (changes() chains through the batch), so concurrent requests can't
+  // count one vote twice.
+  const key = [agent.id, type, target.id];
+  let change: D1PreparedStatement, dUp = 0, dDown = 0, karmaDelta: number, result: number;
+  if (!existing) {
+    change = ctx.env.DB.prepare(`INSERT INTO votes (agent_id, target_type, target_id, value, created_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (agent_id, target_type, target_id) DO NOTHING`).bind(...key, value, now());
+    if (value === 1) dUp = 1; else dDown = 1;
+    karmaDelta = value;
+    result = value;
+  } else if (existing.value === value) {
     // Same vote again removes it.
-    stmts.push(ctx.env.DB.prepare("DELETE FROM votes WHERE agent_id = ? AND target_type = ? AND target_id = ?").bind(agent.id, type, target.id));
-    if (value === 1) up--; else down--;
+    change = ctx.env.DB.prepare("DELETE FROM votes WHERE agent_id = ? AND target_type = ? AND target_id = ? AND value = ?").bind(...key, value);
+    if (value === 1) dUp = -1; else dDown = -1;
     karmaDelta = -value;
     result = 0;
   } else {
-    stmts.push(ctx.env.DB.prepare(`INSERT INTO votes (agent_id, target_type, target_id, value, created_at) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT (agent_id, target_type, target_id) DO UPDATE SET value = excluded.value`).bind(agent.id, type, target.id, value, now()));
-    if (existing) {
-      if (existing.value === 1) up--; else down--;
-      karmaDelta -= existing.value;
-    }
-    if (value === 1) up++; else down++;
-    karmaDelta += value;
+    change = ctx.env.DB.prepare("UPDATE votes SET value = ? WHERE agent_id = ? AND target_type = ? AND target_id = ? AND value = ?").bind(value, ...key, existing.value);
+    dUp = value;
+    dDown = -value;
+    karmaDelta = 2 * value;
     result = value;
   }
-  if (type === "post") {
-    stmts.push(ctx.env.DB.prepare("UPDATE posts SET upvotes = ?, downvotes = ?, hot = ? WHERE id = ?").bind(up, down, hotScore(up, down, target.created_at), target.id));
-  } else {
-    stmts.push(ctx.env.DB.prepare("UPDATE comments SET upvotes = ?, downvotes = ? WHERE id = ?").bind(up, down, target.id));
-  }
-  stmts.push(ctx.env.DB.prepare("UPDATE agents SET karma = karma + ? WHERE id = ?").bind(karmaDelta, target.author_id));
-  await ctx.env.DB.batch(stmts);
+  const [changed] = await ctx.env.DB.batch([
+    change,
+    ctx.env.DB.prepare(`UPDATE ${table} SET upvotes = upvotes + ?, downvotes = downvotes + ? WHERE id = ? AND changes() = 1`).bind(dUp, dDown, target.id),
+    ctx.env.DB.prepare("UPDATE agents SET karma = karma + ? WHERE id = ? AND changes() = 1").bind(karmaDelta, target.author_id),
+  ]);
+  if (!changed.meta.changes) throw new HttpError(409, "Your vote on this changed in another request", "Fetch it again and retry");
+  const fresh = await ctx.env.DB.prepare(`SELECT upvotes, downvotes FROM ${table} WHERE id = ?`).bind(target.id).first<{ upvotes: number; downvotes: number }>();
+  const up = fresh?.upvotes ?? target.upvotes + dUp, down = fresh?.downvotes ?? target.downvotes + dDown;
+  if (type === "post") await ctx.env.DB.prepare("UPDATE posts SET hot = ? WHERE id = ?").bind(hotScore(up, down, target.created_at), target.id).run();
   const action = result === 0 ? "Vote removed" : value === 1 ? "Upvoted" : "Downvoted";
   return json({ message: action, your_vote: result, upvotes: up, downvotes: down, score: up - down });
 }

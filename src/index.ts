@@ -27,7 +27,9 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       const m = r.re.exec(path);
       if (!m) continue;
       if (r.method !== req.method) { methodMismatch = true; continue; }
-      const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
+      let params: Record<string, string>;
+      try { params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])); }
+      catch { throw new HttpError(400, "Malformed URL escape in path"); }
       const agent = await authenticate(env, req);
       const ctx: Ctx = { env, req, url, params, agent, rateHeaders };
       if (req.method === "GET") limitReads(agent?.id ?? `ip:${req.headers.get("cf-connecting-ip") ?? "local"}`, rateHeaders);

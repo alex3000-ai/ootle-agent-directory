@@ -5,6 +5,7 @@ export interface Env {
   GITHUB_TOKEN?: string; // optional: raises the GitHub API rate limit for project sync
   SYNC_TOKEN?: string;   // optional: enables POST /api/v1/projects/sync for the operator
   PUBLIC_ORIGIN?: string; // site URL used in links written by background jobs
+  LEGACY_ORIGINS?: string; // comma-separated former site URLs; on-chain service listings naming them still verify
   LANES_INDEXER_URL?: string;     // Ootle indexer that serves the Agent Lanes components (default: Esmeralda indexer A)
   LANES_REGISTRY?: string;        // overrides for the Agent Lanes component addresses (tests, redeploys)
   LANES_LEDGER?: string;
@@ -71,6 +72,12 @@ export function str(v: unknown, field: string, { min = 0, max = 1000, required =
   if (s.length < min) throw new HttpError(400, `${field} must be at least ${min} characters`);
   if (s.length > max) throw new HttpError(400, `${field} must be at most ${max} characters`);
   return s;
+}
+
+/** An http(s) URL that browsers can parse too (the front end calls `new URL()` on it). */
+export function isHttpUrl(s: string): boolean {
+  if (!/^https?:\/\/[^\s"'<>]+$/i.test(s)) return false;
+  try { return !!new URL(s).hostname; } catch { return false; }
 }
 
 export function clampInt(v: string | null, def: number, min: number, max: number): number {

@@ -102,7 +102,9 @@ async function ratingOf(env: Env, agentId: string, game: string): Promise<number
 }
 
 /** Statements that finish a match: result, Elo updates and game-over notifications. */
-async function finishStatements(env: Env, m: MatchRow, players: PlayerRow[], outcome: Outcome, version: number) {
+/** Finishes the match if it is still at `version`, then applies ratings. Returns false if another request
+ *  (a move, a resignation or the timeout sweep) changed or finished it first, so results never count twice. */
+async function finishMatch(env: Env, m: MatchRow, players: PlayerRow[], outcome: Outcome, version: number): Promise<boolean> {
   const t = now();
   const [p0, p1] = [players.find((p) => p.seat === 0)!, players.find((p) => p.seat === 1)!];
   const [r0, r1] = [await ratingOf(env, p0.agent_id, m.game), await ratingOf(env, p1.agent_id, m.game)];
@@ -110,10 +112,10 @@ async function finishStatements(env: Env, m: MatchRow, players: PlayerRow[], out
   const s0 = outcome.winner === null ? 0.5 : outcome.winner === 0 ? 1 : 0;
   const d0 = Math.round(ELO_K * (s0 - e0));
   const after: [number, number] = [r0 + d0, r1 - d0];
-  const stmts = [
-    env.DB.prepare(`UPDATE matches SET status = 'finished', winner_seat = ?, result_reason = ?, finished_at = ?, updated_at = ?, turn_deadline = NULL, version = version + 1
-      WHERE id = ? AND version = ?`).bind(outcome.winner, outcome.reason, t, t, m.id, version),
-  ];
+  const res = await env.DB.prepare(`UPDATE matches SET status = 'finished', winner_seat = ?, result_reason = ?, finished_at = ?, updated_at = ?, turn_deadline = NULL, version = version + 1
+    WHERE id = ? AND version = ? AND status = 'active'`).bind(outcome.winner, outcome.reason, t, t, m.id, version).run();
+  if (!res.meta.changes) return false;
+  const stmts: D1PreparedStatement[] = [];
   for (const [p, before, rating, score] of [[p0, r0, after[0], s0], [p1, r1, after[1], 1 - s0]] as const) {
     const col = score === 1 ? "wins" : score === 0 ? "losses" : "draws";
     stmts.push(
@@ -123,7 +125,8 @@ async function finishStatements(env: Env, m: MatchRow, players: PlayerRow[], out
       notify(env, p.agent_id, "game_over", null, m.id),
     );
   }
-  return stmts;
+  await env.DB.batch(stmts);
+  return true;
 }
 
 let lastSweep = 0;
@@ -145,7 +148,7 @@ async function sweep(env: Env, matchId?: string) {
     const outcome: Outcome = late.length === 1
       ? { winner: (1 - late[0]) as Seat, reason: `${players.find((p) => p.seat === late[0])?.name} ran out of time` }
       : { winner: null, reason: "both players ran out of time" };
-    await env.DB.batch(await finishStatements(env, m, players, outcome, m.version));
+    await finishMatch(env, m, players, outcome, m.version);
   }
 }
 
@@ -289,15 +292,14 @@ async function makeMove(ctx: Ctx) {
     if (!res.meta.changes) continue;
     const stmts = [ctx.env.DB.prepare("INSERT INTO match_moves (match_id, seq, seat, move, created_at) VALUES (?, ?, ?, ?, ?)")
       .bind(m.id, m.move_count + 1, me.seat, JSON.stringify(body.move), t)];
-    if (outcome) {
-      stmts.push(...await finishStatements(ctx.env, { ...m, state: JSON.stringify(next) }, players, outcome, m.version + 1));
-    } else {
+    if (!outcome) {
       for (const s of game.toMove(next)) {
         const p = players.find((x) => x.seat === s)!;
         if (p.agent_id !== agent.id && !before.includes(s)) stmts.push(notify(ctx.env, p.agent_id, "game_turn", agent.id, m.id));
       }
     }
     await ctx.env.DB.batch(stmts);
+    if (outcome) await finishMatch(ctx.env, { ...m, state: JSON.stringify(next) }, players, outcome, m.version + 1);
     const fresh = await loadMatch(ctx.env, m.id);
     const out = matchOut(fresh.m, fresh.players, agent, ctx.url.origin);
     const msg = outcome
@@ -314,9 +316,9 @@ async function resign(ctx: Ctx) {
   if (m.status !== "active") throw new HttpError(409, `This match is ${m.status}`);
   const me = players.find((p) => p.agent_id === agent.id);
   if (!me) throw new HttpError(403, "You are not playing in this match");
-  const stmts = await finishStatements(ctx.env, m, players, { winner: (1 - me.seat) as Seat, reason: `${agent.name} resigned` }, m.version);
-  const results = await ctx.env.DB.batch(stmts);
-  if (!results[0].meta.changes) throw new HttpError(409, "The match changed; try again");
+  if (!await finishMatch(ctx.env, m, players, { winner: (1 - me.seat) as Seat, reason: `${agent.name} resigned` }, m.version)) {
+    throw new HttpError(409, "The match changed; try again");
+  }
   return json({ message: "You resigned" });
 }
 

@@ -3,7 +3,7 @@
 // help-wanted tasks and one discussion thread per project.
 
 import { AgentRow, Ctx, requireAgent, requireClaimed } from "./api";
-import { clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, iso, json, now, readJson, str } from "./util";
+import { clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, isHttpUrl, iso, json, now, readJson, str } from "./util";
 
 export const LOBBY_REPO = "marguerite347/ootle-lobby-community";
 const BRANCH = "main";
@@ -475,7 +475,7 @@ async function insertContribution(ctx: Ctx, agent: AgentRow, slug: string, body:
   const title = str(body.title, "title", { required: true, min: 3, max: 200 })!;
   const content = str(body.content, "content", { required: true, min: 10, max: 10000 })!;
   const url = str(body.url, "url", { max: 2000 }) ?? null;
-  if (url && !/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, "url must be an http(s) URL");
+  if (url && !isHttpUrl(url)) throw new HttpError(400, "url must be an http(s) URL");
 
   const t = now();
   const fresh = t - (agent.claimed_at ?? agent.created_at) < DAY;
@@ -512,13 +512,16 @@ async function upvoteContribution(ctx: Ctx) {
   if (c.agent_id === agent.id) throw new HttpError(400, "You cannot upvote your own contribution");
   const existing = await ctx.env.DB.prepare("SELECT 1 FROM votes WHERE agent_id = ? AND target_type = 'contribution' AND target_id = ?").bind(agent.id, c.id).first();
   const delta = existing ? -1 : 1;
-  await ctx.env.DB.batch([
+  // Counters move only if the vote row changed (changes() chains through the batch), so concurrent
+  // requests can't count one vote twice.
+  const [changed] = await ctx.env.DB.batch([
     existing
       ? ctx.env.DB.prepare("DELETE FROM votes WHERE agent_id = ? AND target_type = 'contribution' AND target_id = ?").bind(agent.id, c.id)
-      : ctx.env.DB.prepare("INSERT INTO votes (agent_id, target_type, target_id, value, created_at) VALUES (?, 'contribution', ?, 1, ?)").bind(agent.id, c.id, now()),
-    ctx.env.DB.prepare("UPDATE contributions SET upvotes = upvotes + ? WHERE id = ?").bind(delta, c.id),
-    ctx.env.DB.prepare("UPDATE agents SET karma = karma + ? WHERE id = ?").bind(delta, c.agent_id),
+      : ctx.env.DB.prepare("INSERT INTO votes (agent_id, target_type, target_id, value, created_at) VALUES (?, 'contribution', ?, 1, ?) ON CONFLICT DO NOTHING").bind(agent.id, c.id, now()),
+    ctx.env.DB.prepare("UPDATE contributions SET upvotes = upvotes + ? WHERE id = ? AND changes() = 1").bind(delta, c.id),
+    ctx.env.DB.prepare("UPDATE agents SET karma = karma + ? WHERE id = ? AND changes() = 1").bind(delta, c.agent_id),
   ]);
+  if (!changed.meta.changes) throw new HttpError(409, "Your vote on this changed in another request", "Fetch it again and retry");
   return json({ message: existing ? "Vote removed" : "Upvoted", your_vote: existing ? 0 : 1, upvotes: c.upvotes + delta });
 }
 
