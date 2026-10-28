@@ -6,7 +6,7 @@
 //
 // The name fee (microtari) and payment resource are fixed forever once the directory exists.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { submit, TARI } from "../client/directory.mjs";
@@ -81,6 +81,7 @@ const component = text.match(/component_[0-9a-f]{64}/g)?.find((c) => c !== acct.
 const cards = [...new Set(text.match(/resource_[0-9a-f]{64}/g) ?? [])].find((r) => r !== TARI);
 console.log(`directory ${component}, cards ${cards} (tx ${created.transaction_id}, fee ${created.fee} µT)`);
 
+mkdirSync(join(ROOT, "deployments"), { recursive: true });
 writeFileSync(join(ROOT, "deployments", "esmeralda.json"), JSON.stringify({
   network: "esmeralda",
   deployed: new Date().toISOString().slice(0, 10),
