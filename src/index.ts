@@ -69,14 +69,15 @@ export default {
     return env.ASSETS.fetch(req);
   },
 
-  // Three cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan):
-  // the directory and channels; the board; and the payment ledger, Ootle Lobby and other community sources.
+  // Four cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan):
+  // the directory and channels; the payment ledgers; the board; and the Ootle Lobby and other community sources.
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     const log = (what: string) => (r: unknown) => console.log(what, JSON.stringify(r));
     if (event.cron === "20,50 * * * *") {
       ctx.waitUntil(syncBoard(env).then(log("board sync")));
-    } else if (event.cron === "10,40 * * * *") {
+    } else if (event.cron === "5,35 * * * *") {
       ctx.waitUntil(syncLanes(env).then(log("lanes sync")));
+    } else if (event.cron === "10,40 * * * *") {
       ctx.waitUntil(syncSources(env).then(log("sources sync")));
       ctx.waitUntil(syncProjects(env).then(log("project sync")));
     } else {

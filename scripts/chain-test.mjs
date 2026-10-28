@@ -1,6 +1,7 @@
 // The board, work history and community sources against local `wrangler dev`, with a simulated Ootle indexer and
 // forum on 127.0.0.1:5198 (no network, no tTARI). Needs in .dev.vars: SYNC_TOKEN=local-dev-sync-token,
-// BOARD=component_b0…b0, BOARD_INDEXER_URL, LANES_INDEXER_URL and FORUM_URL all http://127.0.0.1:5198.
+// BOARD=component_b0…b0, LANES_LEDGER=component_a3…a3, and BOARD_INDEXER_URL, LANES_INDEXER_URL and FORUM_URL all
+// http://127.0.0.1:5198.
 //   BASE=http://localhost:8787 npm run test:chain
 
 import { execFileSync } from "node:child_process";
@@ -11,7 +12,9 @@ const SYNC = { "x-sync-token": process.env.SYNC_TOKEN || "local-dev-sync-token" 
 const DIRECTORY = "281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61";
 const BOARD = "b0".repeat(32);
 const ENTRIES = "e0".repeat(32);
-const LEDGER = "component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac";
+const LEDGER = "component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac";   // v0.2, frozen
+const LEDGER3 = "a3".repeat(32);                                                                  // v0.3 (LANES_LEDGER)
+const LANES = "1a".repeat(32);
 let failures = 0;
 
 function check(cond, label, extra) {
@@ -53,6 +56,13 @@ const chain = {
     { id: 2, provider: alice, deposited: 1, claimed: 0 },              // dust, never paid: not work history
     { id: 3, provider: bob, deposited: 300000, claimed: 300000, closed: true },
   ],
+  // v0.3: one NFT per lane.
+  lanes3: [
+    { id: 1, provider: alice, deposited: 100000, claimed: 100000, refunded: 0, closed: true },
+    { id: 2, provider: alice, deposited: 50000, claimed: 0, refunded: 0 },               // open escrow
+    { id: 3, provider: bob, deposited: 40000, claimed: 0, refunded: 40000, closed: true }, // refunded, never paid
+  ],
+  laneEvents: [],
   forumOk: true,
 };
 const entryNft = (id) => {
@@ -78,6 +88,7 @@ const server = createServer((req, res) => {
   if (m) return Number(m[1]) < chain.entries.length ? send(200, entryNft(Number(m[1]))) : send(404, {});
   if (p === "/transactions/events") {
     const topic = url.searchParams.get("topic");
+    if (topic === "LaneLedger.lanes.lane_claimed") return send(200, { events: chain.laneEvents.map((id, i) => [`lt${i}`, { substate_id: `component_${LEDGER3}`, payload: { lane_id: String(id) } }]) });
     const list = topic === "ListingsBoard.board.updated" ? chain.events.updated : [];
     return send(200, { events: list.map((id, i) => [`tx${i}`, { substate_id: `component_${BOARD}`, payload: { id: String(id) } }]) });
   }
@@ -86,6 +97,17 @@ const server = createServer((req, res) => {
     { "@cbor": "map", entries: chain.lanes.map((l) => [l.id, [bytes("ab".repeat(32)), l.provider, bytes("cd".repeat(32)), l.deposited, l.claimed, null, l.closed === true, bytes("ef".repeat(32))]]) },
     chain.lanes.length + 1, {},
   ] } } } } } });
+  if (p === `/substates/component_${LEDGER3}`) return send(200, { state: { up: { substate: { Component: { header: { template_address: "00".repeat(32) },
+    body: { state: [tag(128, DIRECTORY), 6, tag(132, "dd".repeat(32)), tag(131, LANES), [tag(132, "de".repeat(32))], chain.lanes3.length] } } } } } });
+  const lm = new RegExp(`^/substates/nft_${LANES}_u64_(\\d+)$`).exec(p);
+  if (lm) {
+    const l = chain.lanes3.find((x) => x.id === Number(lm[1]));
+    if (!l) return send(404, {});
+    return send(200, { state: { up: { substate: { NonFungible: {
+      data: [l.id, bytes("ab".repeat(32)), l.provider, bytes("cd".repeat(32)), bytes("ef".repeat(32)), 10],
+      mutable_data: [l.deposited, l.claimed, l.refunded, null, l.closed === true],
+    } } } } });
+  }
   if (p === "/t/281.json") return chain.forumOk ? send(200, { title: "Community Apps Directory", posts_count: 10, post_stream: { posts: [{ cooked: FORUM_POST }] } }) : send(503, {});
   send(404, {});
 });
@@ -93,7 +115,8 @@ await new Promise((r) => server.listen(5198, "127.0.0.1", r));
 
 // Cards for the authors (the directory mirror reads the real chain; these are local stand-ins).
 sql(`DELETE FROM board_entries`);
-sql(`DELETE FROM sync_state WHERE key LIKE 'board_%'`);
+sql(`DELETE FROM sync_state WHERE key LIKE 'board_%' OR key LIKE 'lanes_%'`);
+sql(`DELETE FROM ledger_lanes`);
 for (const [name, status] of [[alice, "active"], [bob, "active"], [carol, "retired"]]) {
   sql(`INSERT INTO directory_cards (name, agent_key, owner_key, messaging_address, description, status, registered_epoch, updated_epoch, synced_at)
     VALUES ('${name}', '${"11".repeat(32)}', '${"22".repeat(32)}', '', 'chain-test card', '${status}', 1, 1, ${Date.now()})`);
@@ -140,15 +163,24 @@ try {
   // --- work history ---
   check((await call("POST", "/api/v1/lanes/sync")).status === 403, "lanes sync needs the operator token");
   const ls = (await call("POST", "/api/v1/lanes/sync", { headers: SYNC })).data.result;
-  check(ls.status === "ok" && ls.lanes === 3, "the ledger syncs", ls);
+  check(ls.status === "ok" && ls.lanes === 3 && ls.read === 3 && !ls.pending, "both ledgers sync (every v0.3 lane read)", ls);
   const prof = (await call("GET", `/api/v1/directory/${alice}`)).data;
-  check(prof.work.paid_lanes === 1 && prof.work.paid_tari === "0.2" && prof.work.lanes.length === 1, "work history counts only lanes that paid out (not dust)", prof.work);
-  check(prof.work.open_escrow_microtari === 300001, "open escrow is shown separately", prof.work);
+  check(prof.work.paid_lanes === 2 && prof.work.paid_tari === "0.3" && prof.work.lanes[0].ledger === `component_${LEDGER3}` && prof.work.lanes.at(-1).version === "v0.2",
+    "work history counts paid lanes on both ledgers, v0.3 first, and not dust", prof.work);
+  check(prof.work.open_escrow_microtari === 300001 + 50000, "open escrow is shown separately", prof.work);
   check(prof.listings.map((e) => e.id).join() === "0" && prof.endorsements.length === 1, "an agent's page has its live listings and endorsements received", { l: prof.listings, e: prof.endorsements });
   const bobPage = (await call("GET", `/api/v1/directory/${bob}`)).data;
-  check(bobPage.work.paid_tari === "0.3" && bobPage.work.lanes[0].state === "closed" && bobPage.work.distinct_buyers === 1, "closed lanes still count as paid work", bobPage.work);
+  check(bobPage.work.paid_tari === "0.3" && bobPage.work.paid_lanes === 1 && bobPage.work.lanes[0].state === "closed" && bobPage.work.distinct_buyers === 1,
+    "closed lanes still count as paid work; a refunded lane that never paid doesn't", bobPage.work);
+  // A claim on-chain comes in through its event.
+  chain.lanes3[1].claimed = 20000;
+  chain.laneEvents.push(2);
+  const ls2 = (await call("POST", "/api/v1/lanes/sync", { headers: SYNC })).data.result;
+  const prof2 = (await call("GET", `/api/v1/directory/${alice}`)).data;
+  check(ls2.status === "ok" && prof2.work.paid_lanes === 3 && prof2.work.open_escrow_microtari === 300001 + 30000, "a new claim is picked up from its event", { ls2, work: prof2.work });
   const lanes = (await call("GET", "/api/v1/lanes")).data.lanes;
-  check(lanes.admin === null && lanes.fee === "none" && lanes.lane_close_epochs === 6, "lanes config", lanes);
+  check(lanes.admin === null && lanes.fee === "none" && lanes.lane_close_epochs === 6 && lanes.lane_count === 3 && lanes.lanes_resource === `resource_${LANES}`
+    && lanes.frozen.v0_2.ledger === LEDGER, "lanes config, with v0.2 marked frozen", lanes);
 
   // --- community sources ---
   const ss = (await call("POST", "/api/v1/sources/sync", { headers: SYNC })).data.result;
@@ -171,6 +203,7 @@ try {
 } finally {
   sql(`DELETE FROM directory_cards WHERE description = 'chain-test card'`);
   sql(`DELETE FROM ledger_lanes`);
+  sql(`DELETE FROM sync_state WHERE key LIKE 'lanes_%'`);
   server.close();
 }
 
