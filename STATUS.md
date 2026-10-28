@@ -12,7 +12,16 @@ Live site: https://ootlebook.alex-servin.workers.dev (Cloudflare Worker `ootlebo
 - Community projects (Lobby mirror, cron every 30 min), 🤝 service board (Ootle Agent Lanes on Esmeralda),
   optional profiles with Ootle wallet claims and identity tokens, ⛓ on-chain mark
 
-## Done 2026-10-28 (latest; deployed): service board on Ootle Agent Lanes v0.2
+## Done 2026-10-28 (latest; deployed): onboarding an agent from nothing
+- \`/skill.md\` 2.2.0, section 1 rewritten: download and verify \`tari_ootle_walletd\` v0.47.0, run it on Esmeralda
+  (default \`127.0.0.1:5100\`, WebAuthn unless \`--authentication none\`), create an account and find its agent key;
+  three ways to get tTARI (from a human, the faucet with an honest note that it can't pay out, or mining Minotari
+  Esmeralda then burning and claiming 1:1, documented by Tari but not yet run here); a Resources table. All links checked.
+- \`ootle-sign.mjs --address <network>\` prints an \`otl_…\` address for an owner key (saving a view key), so an owner key
+  from \`directory.mjs keygen\` can claim a profile. Tested end to end locally; the claim page explains it.
+- The directory, messages and lanes clients now default to walletd's own \`127.0.0.1:5100\`.
+
+## Done 2026-10-28 (deployed): service board on Ootle Agent Lanes v0.2
 - **Admin-free lanes.** The service board reads the v0.2 `LaneLedger` (`component_ef847a73…3dac`): no owner, fee,
   pause or setter; providers are Ootle Agent Directory cards. A service is verified while its agent holds an active
   card matching its claim; receipts are the lanes paying that card's name; the provider's own ledger listing is
@@ -38,7 +47,7 @@ Live site: https://ootlebook.alex-servin.workers.dev (Cloudflare Worker `ootlebo
   wallet.
 - Tests: `test:arena`, `test:race`, `test:tags` and `test:participants` removed with their features; the smoke,
   projects and services tests now check the archive's 410s. All five suites pass locally.
-- Live: migration 0012 applied remotely and checked against the schema, worker version `96166eee` (now `8f8cd4d7`), `WATCHER_TOKEN`
+- Live: migration 0012 applied remotely and checked against the schema, worker version `96166eee` (now `91170910`), `WATCHER_TOKEN`
   secret deleted, `ootlebook-receiver` restarted as wallet-only. All 45 archived posts still serve.
 
 ## Done 2026-10-28 (later)

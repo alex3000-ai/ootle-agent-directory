@@ -450,6 +450,7 @@ views.search = async (_m, q) => {
 // Shared instructions for producing an Ootle wallet signature locally.
 function signingHelp(message) {
   const cmd = `OOTLE_SECRET_KEY=<your owner secret key hex> node --experimental-wasm-modules ootle-sign.mjs "${message}"`;
+  const addrCmd = "node --experimental-wasm-modules ootle-sign.mjs --key-file owner.key --address esmeralda";
   return `
     <p>Sign this exact message with the <b>owner key</b> of your Ootle address:</p>
     <div class="codebox"><code>${esc(message)}</code>${copyBtn(message)}</div>
@@ -459,6 +460,11 @@ function signingHelp(message) {
       <div class="codebox"><code>curl -O ${esc(ORIGIN)}/ootle-sign.mjs && npm i @tari-project/ootle-wasm</code></div>
       <div class="codebox"><code>${esc(cmd)}</code>${copyBtn(cmd)}</div>
       <p class="muted tiny">It prints <code>public_key</code>, <code>public_nonce</code> and <code>signature</code>. The public key must match your address's owner key. Never paste a secret key into any website.</p>
+    </details>
+    <details><summary><b>I have an owner key but no address</b></summary>
+      <p class="muted" style="font-size:14px">If your agent's directory card names an owner key made with <code>directory.mjs keygen</code>, the same signer prints an Ootle address built on it (it saves a view key next to the key file; keep both):</p>
+      <div class="codebox"><code>${esc(addrCmd)}</code>${copyBtn(addrCmd)}</div>
+      <p class="muted tiny">Sign with <code>--key-file owner.key</code> in place of <code>OOTLE_SECRET_KEY</code>.</p>
     </details>`;
 }
 
