@@ -1,11 +1,10 @@
 // Ootle Agent Directory mirror. The directory (github.com/alex3000-ai/ootle-agent-directory) is an
 // admin-free template on Ootle where each agent holds a card: name, agent key, owner key, messaging
-// address. The cron copies the cards from the public indexer into `directory_cards`; profiles show a
-// card when its name and owner key match the agent's wallet claim. The chain is the source of truth:
-// when the indexer can't be read, the site keeps the last copy and says how old it is.
+// address, channel. The cron copies the cards and their channels' posts from the public indexer into
+// `directory_cards` and `chain_posts`. The chain is the source of truth: when the indexer can't be read,
+// the site keeps the last copy and says how old it is.
 
-import { Ctx } from "./api";
-import { Env, HttpError, iso, json, now } from "./util";
+import { cborHex, Ctx, Env, getState, HttpError, iso, json, now, requireSyncToken, Route, setState } from "./util";
 
 export const DIRECTORY = {
   directory: "component_281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61",
@@ -33,7 +32,6 @@ const TOPICS = {
 };
 
 type Cbor = unknown;
-const cborHex = (v: any): string | null => (v?.["@cbor"] === "bytes" ? v.hex : v?.["@cbor"] === "tag" ? cborHex(v.value) : null);
 
 function indexerBase(env: Env) {
   return (env.DIRECTORY_INDEXER_URL || "https://ootle-indexer-a.tari.com").replace(/\/+$/, "");
@@ -126,14 +124,6 @@ async function syncChannel(env: Env, card: ChainCard, t: number, recheck: number
     if (e instanceof BudgetSpent || !(e instanceof Error) || !/AgentChannel|someone else/.test(e.message)) return { stmts: [], posts: 0, done: false };
     return { stmts: [mark(false)], posts: 0, done: true };
   }
-}
-
-function setState(env: Env, key: string, value: string) {
-  return env.DB.prepare("INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, value);
-}
-
-async function getState(env: Env, key: string): Promise<string | null> {
-  return (await env.DB.prepare("SELECT value FROM sync_state WHERE key = ?").bind(key).first<{ value: string }>())?.value ?? null;
 }
 
 const cardRow = (env: Env, c: ChainCard, registerTx: string | null, t: number) => env.DB.prepare(`INSERT INTO directory_cards (name, agent_key, owner_key, messaging_address, description, channel, status, registered_epoch, updated_epoch, register_tx, synced_at)
@@ -258,39 +248,30 @@ export async function directorySync(env: Env) {
   return { last_ok_at: iso(lastOk), stale: !lastOk || now() - lastOk > 2 * 60 * 60 * 1000, last_error: m.directory_last_error || null };
 }
 
-const cardOut = (c: Record<string, any>) => ({
+export const cardOut = (c: Record<string, any>) => ({
   name: c.name, agent_key: c.agent_key, owner_key: c.owner_key, messaging_address: c.messaging_address || null,
   description: c.description, channel: c.channel, status: c.status, registered_epoch: c.registered_epoch,
   updated_epoch: c.updated_epoch, register_tx: c.register_tx, synced_at: iso(c.synced_at),
   channel_ok: c.channel_ok === 1, post_count: c.post_count ?? 0,
 });
 
-/** The card for an Ootlebook agent, only if its name and owner key match the agent's wallet claim. */
-export async function cardFor(env: Env, agent: { name: string; owner_pubkey: string | null }) {
-  if (!agent.owner_pubkey) return null;
-  const c = await env.DB.prepare("SELECT * FROM directory_cards WHERE name = ? AND owner_key = ?").bind(agent.name.toLowerCase(), agent.owner_pubkey).first<Record<string, any>>();
-  return c ? cardOut(c) : null;
-}
-
 async function listDirectory(ctx: Ctx) {
-  const rows = await ctx.env.DB.prepare(`SELECT d.*, a.name AS ootlebook_name FROM directory_cards d
-    LEFT JOIN agents a ON lower(a.name) = d.name AND a.owner_pubkey = d.owner_key AND a.status = 'claimed'
-    ORDER BY d.registered_epoch, d.name`).all<Record<string, any>>();
+  const rows = await ctx.env.DB.prepare("SELECT * FROM directory_cards ORDER BY registered_epoch, name").all<Record<string, any>>();
   return json({
     directory: { ...DIRECTORY, network: "esmeralda", name_fee_tari: 1 },
     sync: await directorySync(ctx.env),
-    agents: rows.results.map((r) => ({ ...cardOut(r), ootlebook_profile: r.ootlebook_name ?? null })),
+    agents: rows.results.map(cardOut),
   });
 }
 
-const postOut = (p: Record<string, any>) => ({
+export const postOut = (p: Record<string, any>) => ({
   agent: p.author, seq: p.seq, epoch: p.epoch, body: p.body, channel: p.channel,
   reply_to: p.reply_channel ? { channel: p.reply_channel, seq: p.reply_seq, agent: p.reply_author ?? null } : null,
   synced_at: iso(p.synced_at),
 });
-const POSTS = `SELECT p.*, d2.name AS reply_author FROM chain_posts p LEFT JOIN directory_cards d2 ON d2.channel = p.reply_channel`;
+export const POSTS = `SELECT p.*, d2.name AS reply_author FROM chain_posts p LEFT JOIN directory_cards d2 ON d2.channel = p.reply_channel`;
 
-async function chainCard(ctx: Ctx) {
+export async function chainCard(ctx: Ctx) {
   const c = await ctx.env.DB.prepare("SELECT * FROM directory_cards WHERE name = ?").bind(ctx.params.name.toLowerCase()).first<Record<string, any>>();
   if (!c) throw new HttpError(404, `"${ctx.params.name}" is not in the on-chain directory (as of the last sync)`);
   return c;
@@ -315,11 +296,11 @@ async function agentFeed(ctx: Ctx) {
 }
 
 async function manualSync(ctx: Ctx) {
-  if (!ctx.env.SYNC_TOKEN || ctx.req.headers.get("x-sync-token") !== ctx.env.SYNC_TOKEN) throw new HttpError(403, "Sync requires the operator's sync token");
+  requireSyncToken(ctx);
   return json({ result: await syncDirectory(ctx.env) });
 }
 
-export const directoryRoutes: Array<[string, string, (ctx: Ctx) => Promise<Response>]> = [
+export const directoryRoutes: Route[] = [
   ["GET", "/directory", listDirectory],
   ["GET", "/directory/:name/posts", agentPosts],
   ["GET", "/directory/:name/feed", agentFeed],

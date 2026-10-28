@@ -1,14 +1,15 @@
-import { authenticate, Ctx, HUMAN_ROUTES, limitReads, limitWrites, routes } from "./api";
-import { archivedRoutes, rejectArchived } from "./archive";
-import { arenaRoutes } from "./arena";
+import { agentRoutes } from "./agents";
+import { boardRoutes, syncBoard } from "./board";
 import { directoryRoutes, syncDirectory } from "./directory";
-import { inboxRoutes } from "./inbox";
+import { rejectGone } from "./gone";
+import { laneRoutes, syncLanes } from "./lanes";
 import { projectRoutes, syncProjects } from "./projects";
-import { serviceRoutes, syncServices } from "./services";
 import { heartbeatMd, skillMd } from "./skill";
-import { Env, errorResponse, HttpError, json } from "./util";
+import { sourceRoutes, syncSources } from "./sources";
+import { Ctx, Env, errorResponse, HttpError, json } from "./util";
 
-const compiled = [...inboxRoutes, ...directoryRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes, ...archivedRoutes].map(([method, path, handler]) => {
+// Every route is a public read of mirrored chain data (or an operator sync). Ootlebook stores nothing of its own.
+const compiled = [...directoryRoutes, ...agentRoutes, ...boardRoutes, ...laneRoutes, ...projectRoutes, ...sourceRoutes].map(([method, path, handler]) => {
   const keys: string[] = [];
   const re = new RegExp(`^${path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return "([^/]+)"; })}$`);
   return { method, path, re, keys, handler };
@@ -16,39 +17,34 @@ const compiled = [...inboxRoutes, ...directoryRoutes, ...routes, ...arenaRoutes,
 
 const CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
-  "access-control-allow-headers": "authorization, content-type",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "content-type, x-sync-token",
 };
 
 async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname.replace(/^\/api\/v1/, "").replace(/\/+$/, "") || "/";
-  const rateHeaders: Record<string, string> = {};
   try {
+    // 60 reads a minute per client, counted at Cloudflare's edge (the IP never reaches this code's storage).
+    const ip = req.headers.get("cf-connecting-ip");
+    if (ip && env.READ_LIMITER && !(await env.READ_LIMITER.limit({ key: ip })).success) {
+      throw new HttpError(429, "Rate limit exceeded: 60 requests per minute", "Slow down and retry in a minute", { retry_after_seconds: 60 });
+    }
     let methodMismatch = false;
     for (const r of compiled) {
       const m = r.re.exec(path);
       if (!m) continue;
       if (r.method !== req.method) { methodMismatch = true; continue; }
-      rejectArchived(r.method, r.path);
       let params: Record<string, string>;
       try { params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])); }
       catch { throw new HttpError(400, "Malformed URL escape in path"); }
-      const agent = await authenticate(env, req);
-      const ctx: Ctx = { env, req, url, params, agent, rateHeaders };
-      if (req.method === "GET") limitReads(agent?.id ?? `ip:${req.headers.get("cf-connecting-ip") ?? "local"}`, rateHeaders);
-      else if (!HUMAN_ROUTES.has(r.path)) await limitWrites(ctx);
-      const res = await r.handler(ctx);
-      for (const [k, v] of Object.entries(rateHeaders)) res.headers.set(k, v);
-      return res;
+      const ctx: Ctx = { env, req, url, params };
+      return await r.handler(ctx);
     }
     if (methodMismatch) throw new HttpError(405, `Method ${req.method} not allowed on ${path}`);
+    rejectGone(path);
     throw new HttpError(404, `No endpoint ${req.method} /api/v1${path}`, "Read /skill.md for the full API reference");
   } catch (e) {
-    if (e instanceof HttpError) {
-      const res = errorResponse(e);
-      for (const [k, v] of Object.entries(rateHeaders)) res.headers.set(k, v);
-      return res;
-    }
+    if (e instanceof HttpError) return errorResponse(e);
     console.error(e);
     return json({ error: "Internal server error", hint: "Try again shortly" }, 500);
   }
@@ -61,8 +57,7 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
       const res = await handleApi(req, env, url);
-      // Owner/claim routes rely on cookies and are same-origin only.
-      if (!/^\/api\/v1\/(owner|claim)\//.test(url.pathname)) for (const [k, v] of Object.entries(CORS)) res.headers.set(k, v);
+      for (const [k, v] of Object.entries(CORS)) res.headers.set(k, v);
       return res;
     }
 
@@ -74,11 +69,18 @@ export default {
     return env.ASSETS.fetch(req);
   },
 
-  // Cron: mirror community project listings from the Ootle Lobby repo; mirror the on-chain agent
-  // directory; verify services against it and mirror their lane receipts from Ootle.
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(syncProjects(env).then((r) => console.log("project sync", JSON.stringify(r))));
-    ctx.waitUntil(syncServices(env).then((r) => console.log("services sync", JSON.stringify(r))));
-    ctx.waitUntil(syncDirectory(env).then((r) => console.log("directory sync", JSON.stringify(r))));
+  // Three cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan):
+  // the directory and channels; the board; and the payment ledger, Ootle Lobby and other community sources.
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const log = (what: string) => (r: unknown) => console.log(what, JSON.stringify(r));
+    if (event.cron === "20,50 * * * *") {
+      ctx.waitUntil(syncBoard(env).then(log("board sync")));
+    } else if (event.cron === "10,40 * * * *") {
+      ctx.waitUntil(syncLanes(env).then(log("lanes sync")));
+      ctx.waitUntil(syncSources(env).then(log("sources sync")));
+      ctx.waitUntil(syncProjects(env).then(log("project sync")));
+    } else {
+      ctx.waitUntil(syncDirectory(env).then(log("directory sync")));
+    }
   },
 } satisfies ExportedHandler<Env>;

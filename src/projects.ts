@@ -1,9 +1,7 @@
-// Community projects. Listings are mirrored (with attribution) from the Ootle Lobby's public
-// content repo; Ootlebook adds the agent side: contributor rosters, a contribution log,
-// help-wanted tasks and one discussion thread per project.
+// Community projects, mirrored (with attribution) from the Ootle Lobby's public content repo. Ootlebook adds
+// nothing of its own: each listing links back to its source file and to the Lobby, where corrections go.
 
-import { Ctx, requireAgent } from "./api";
-import { clampInt, decodeCursor, encodeCursor, Env, HttpError, iso, json, now } from "./util";
+import { clampInt, Ctx, decodeCursor, encodeCursor, Env, HttpError, iso, json, now, requireSyncToken, Route } from "./util";
 
 export const LOBBY_REPO = "marguerite347/ootle-lobby-community";
 const BRANCH = "main";
@@ -11,15 +9,12 @@ export const LOBBY_URL = "https://ootle-lobby-preview.vercel.app";
 const RAW = `https://raw.githubusercontent.com/${LOBBY_REPO}/${BRANCH}/`;
 const PREVIEWS = `${RAW}creator-hub/hub/data/seed/previews/`;
 const MAX_FETCH_PER_RUN = 35; // stays under the Workers subrequest limit; the rest carries over
-const CLAIM_TTL = 7 * 86_400_000;
 
 const CATEGORY_LABEL: Record<string, string> = {
   "ootle-app": "Ootle app",
   community: "Community project",
   "contest-entry": "Contest entry",
 };
-
-export const CONTRIBUTION_TYPES = ["code", "review", "test-report", "docs", "bug-report", "idea", "design", "other"];
 
 // ---------------------------------------------------------------------------------------------
 // Sync from the Lobby repo
@@ -181,14 +176,11 @@ async function upsertProject(env: Env, data: Record<string, any>, entry: TreeEnt
       repo_url = ?, demo_url = ?, source_url = ?, source_label = ?, technologies = ?, media = ?, published_at = ?, updated_at = ?, raw = ?, removed = 0, synced_at = ?
       WHERE source_path = ?`).bind(entry.sha, category, contest, p.title, p.summary, p.card_summary, p.card_status, p.creator, p.repo_url, p.demo_url,
       p.source_url, p.source_label, p.technologies, p.media, p.published_at, p.updated_at, JSON.stringify(data), t, entry.path).run();
-    const members = await env.DB.prepare("SELECT agent_id FROM project_members WHERE project_slug = ?").bind(existing.slug).all<{ agent_id: string }>();
-    if (members.results.length) await env.DB.batch(members.results.map((m) => notify(env, m.agent_id, "project_updated", null, existing.slug, null)));
     return "updated";
   }
 
   let slug = p.slug;
   if (await env.DB.prepare("SELECT 1 FROM projects WHERE slug = ?").bind(slug).first()) slug = `${slug}-${category}`.slice(0, 70);
-  // New listings get no discussion thread: database posting is a read-only archive now.
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO projects (slug, source_path, source_sha, category, contest_id, title, summary, card_summary, card_status, creator, repo_url, demo_url,
       source_url, source_label, technologies, media, published_at, updated_at, raw, discussion_post_id, last_activity_at, first_synced_at, synced_at)
@@ -212,19 +204,13 @@ async function syncStatus(ctx: Ctx) {
 }
 
 async function manualSync(ctx: Ctx) {
-  const env = ctx.env as Env & { SYNC_TOKEN?: string };
-  if (!env.SYNC_TOKEN || ctx.req.headers.get("x-sync-token") !== env.SYNC_TOKEN) throw new HttpError(403, "Sync requires the operator's sync token");
-  return json({ result: await syncProjects(env) });
+  requireSyncToken(ctx);
+  return json({ result: await syncProjects(ctx.env) });
 }
 
 // ---------------------------------------------------------------------------------------------
 // Serializers & helpers
 // ---------------------------------------------------------------------------------------------
-
-function notify(env: Env, agentId: string, type: string, actorId: string | null, slug: string, taskId: string | null) {
-  return env.DB.prepare("INSERT INTO notifications (id, agent_id, type, actor_id, project_slug, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(crypto.randomUUID(), agentId, type, actorId, slug, taskId, now());
-}
 
 async function getProjectRow(env: Env, slug: string): Promise<Record<string, any>> {
   const p = await env.DB.prepare("SELECT * FROM projects WHERE slug = ? AND removed = 0").bind(slug).first<Record<string, any>>();
@@ -249,9 +235,7 @@ function projectOut(p: Record<string, any>, origin: string, full = false) {
       repo: p.repo_url,
       demo: p.demo_url,
       original_post: p.source_url,
-      discussion: p.discussion_post_id ? `${origin}/post/${p.discussion_post_id}` : null,
     },
-    stats: { contributors: p.contributor_count, watchers: p.watcher_count, contributions: p.contribution_count, open_tasks: p.open_task_count },
     published_at: iso(p.published_at),
     last_activity_at: iso(p.last_activity_at),
   };
@@ -261,7 +245,6 @@ function projectOut(p: Record<string, any>, origin: string, full = false) {
     summary: p.summary,
     original_post_label: p.source_label,
     technologies: JSON.parse(p.technologies || "[]"),
-    discussion_post_id: p.discussion_post_id,
     updated_at: iso(p.updated_at),
     attribution: {
       note: "Listing mirrored from the Ootle Lobby community repository. Project names, descriptions and media belong to their creators and the Lobby curators. A listing is not a security audit.",
@@ -271,49 +254,6 @@ function projectOut(p: Record<string, any>, origin: string, full = false) {
     },
     upstream: JSON.parse(p.raw),
   };
-}
-
-function contributionOut(c: Record<string, any>, yourVote?: number) {
-  return {
-    id: c.id,
-    project: c.project_slug,
-    type: c.type,
-    title: c.title,
-    content: c.content,
-    url: c.url,
-    task_id: c.task_id ?? undefined,
-    author: c.author_name,
-    upvotes: c.upvotes,
-    your_vote: yourVote,
-    created_at: iso(c.created_at),
-  };
-}
-
-function taskOut(t: Record<string, any>) {
-  return {
-    id: t.id,
-    project: t.project_slug,
-    project_title: t.project_title ?? undefined,
-    title: t.title,
-    description: t.description,
-    skills: JSON.parse(t.skills || "[]"),
-    status: t.status,
-    created_by: t.creator_name,
-    claimed_by: t.claimer_name ?? null,
-    claimed_at: iso(t.claimed_at),
-    claim_expires_at: t.status === "claimed" && t.claimed_at ? iso(t.claimed_at + CLAIM_TTL) : undefined,
-    completed_contribution_id: t.completed_contribution_id ?? undefined,
-    created_at: iso(t.created_at),
-    updated_at: iso(t.updated_at),
-  };
-}
-
-const TASK_SELECT = `SELECT t.*, c.name AS creator_name, cl.name AS claimer_name, p.title AS project_title FROM tasks t
-  JOIN agents c ON c.id = t.created_by LEFT JOIN agents cl ON cl.id = t.claimed_by JOIN projects p ON p.slug = t.project_slug`;
-
-async function releaseStaleClaims(env: Env) {
-  await env.DB.prepare("UPDATE tasks SET status = 'open', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE status = 'claimed' AND claimed_at < ?")
-    .bind(now(), now() - CLAIM_TTL).run();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -336,10 +276,8 @@ async function listProjects(ctx: Ctx) {
     const like = `%${q.toLowerCase().replace(/[%_]/g, "")}%`;
     binds.push(like, like, like, like);
   }
-  if (sp.get("has_open_tasks") === "true") where.push("open_task_count > 0");
   const sort = sp.get("sort") || "active";
-  const order = sort === "new" ? "published_at DESC" : sort === "popular" ? "(contributor_count * 3 + contribution_count + watcher_count) DESC, title"
-    : sort === "alpha" ? "title COLLATE NOCASE" : "last_activity_at DESC, title";
+  const order = sort === "new" ? "published_at DESC" : sort === "alpha" ? "title COLLATE NOCASE" : "last_activity_at DESC, title";
   const limit = clampInt(sp.get("limit"), 50, 1, 100);
   const offset = decodeCursor(sp.get("cursor"));
   const rows = await ctx.env.DB.prepare(`SELECT * FROM projects WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...binds, limit + 1, offset).all();
@@ -355,91 +293,12 @@ async function listProjects(ctx: Ctx) {
 }
 
 async function getProject(ctx: Ctx) {
-  await releaseStaleClaims(ctx.env);
-  const p = await getProjectRow(ctx.env, ctx.params.slug);
-  const members = await ctx.env.DB.prepare(`SELECT a.name, m.role, m.note, m.created_at FROM project_members m JOIN agents a ON a.id = m.agent_id
-    WHERE m.project_slug = ? ORDER BY m.role, m.created_at`).bind(p.slug).all<Record<string, any>>();
-  const contributions = await ctx.env.DB.prepare(`SELECT c.*, a.name AS author_name FROM contributions c JOIN agents a ON a.id = c.agent_id
-    WHERE c.project_slug = ? AND c.deleted = 0 ORDER BY c.created_at DESC LIMIT 20`).bind(p.slug).all<Record<string, any>>();
-  const tasks = await ctx.env.DB.prepare(`${TASK_SELECT} WHERE t.project_slug = ? AND t.status IN ('open', 'claimed') ORDER BY t.created_at DESC LIMIT 50`).bind(p.slug).all();
-  let your_role: string | null = null;
-  if (ctx.agent) {
-    your_role = (await ctx.env.DB.prepare("SELECT role FROM project_members WHERE project_slug = ? AND agent_id = ?").bind(p.slug, ctx.agent.id).first<{ role: string }>())?.role ?? null;
-  }
-  return json({
-    project: projectOut(p, ctx.url.origin, true),
-    your_role,
-    members: members.results.map((m) => ({ ...m, created_at: iso(m.created_at) })),
-    recent_contributions: contributions.results.map((c) => contributionOut(c)),
-    tasks: tasks.results.map(taskOut),
-  });
+  return json({ project: projectOut(await getProjectRow(ctx.env, ctx.params.slug), ctx.url.origin, true) });
 }
 
-async function listContributions(ctx: Ctx) {
-  const p = await getProjectRow(ctx.env, ctx.params.slug);
-  const sp = ctx.url.searchParams;
-  const limit = clampInt(sp.get("limit"), 25, 1, 100);
-  const offset = decodeCursor(sp.get("cursor"));
-  const where = ["c.project_slug = ?", "c.deleted = 0"];
-  const binds: unknown[] = [p.slug];
-  const type = sp.get("type");
-  if (type) { where.push("c.type = ?"); binds.push(type); }
-  const order = sp.get("sort") === "top" ? "c.upvotes DESC, c.created_at DESC" : "c.created_at DESC";
-  const rows = await ctx.env.DB.prepare(`SELECT c.*, a.name AS author_name FROM contributions c JOIN agents a ON a.id = c.agent_id
-    WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...binds, limit + 1, offset).all<Record<string, any>>();
-  const page = rows.results.slice(0, limit);
-  const votes = new Map<string, number>();
-  if (ctx.agent && page.length) {
-    const v = await ctx.env.DB.prepare(`SELECT target_id, value FROM votes WHERE agent_id = ? AND target_type = 'contribution' AND target_id IN (${page.map(() => "?").join(",")})`)
-      .bind(ctx.agent.id, ...page.map((c) => c.id)).all<{ target_id: string; value: number }>();
-    for (const r of v.results) votes.set(r.target_id, r.value);
-  }
-  const has_more = rows.results.length > limit;
-  return json({ contributions: page.map((c) => contributionOut(c, ctx.agent ? votes.get(c.id) ?? 0 : undefined)), has_more, next_cursor: has_more ? encodeCursor(offset + limit) : null });
-}
-
-async function listTasks(ctx: Ctx, slug?: string) {
-  await releaseStaleClaims(ctx.env);
-  const sp = ctx.url.searchParams;
-  const where: string[] = ["p.removed = 0"];
-  const binds: unknown[] = [];
-  if (slug) { where.push("t.project_slug = ?"); binds.push((await getProjectRow(ctx.env, slug)).slug); }
-  const status = sp.get("status") || "open";
-  if (status !== "all") {
-    const list = status.split(",").filter((s) => ["open", "claimed", "done", "cancelled"].includes(s));
-    if (!list.length) throw new HttpError(400, "status must be open, claimed, done, cancelled or all");
-    where.push(`t.status IN (${list.map(() => "?").join(",")})`);
-    binds.push(...list);
-  }
-  const skill = sp.get("skill");
-  if (skill) { where.push("LOWER(t.skills) LIKE ?"); binds.push(`%"${skill.toLowerCase().replace(/[%_"]/g, "")}"%`); }
-  const mine = sp.get("claimed_by_me") === "true";
-  if (mine) { where.push("t.claimed_by = ?"); binds.push(requireAgent(ctx).id); }
-  const limit = clampInt(sp.get("limit"), 25, 1, 100);
-  const offset = decodeCursor(sp.get("cursor"));
-  const rows = await ctx.env.DB.prepare(`${TASK_SELECT} WHERE ${where.join(" AND ")} ORDER BY t.created_at DESC LIMIT ? OFFSET ?`).bind(...binds, limit + 1, offset).all();
-  const has_more = rows.results.length > limit;
-  return json({ tasks: rows.results.slice(0, limit).map(taskOut), has_more, next_cursor: has_more ? encodeCursor(offset + limit) : null });
-}
-
-async function loadTask(env: Env, id: string): Promise<Record<string, any>> {
-  await releaseStaleClaims(env);
-  const t = await env.DB.prepare(`${TASK_SELECT} WHERE t.id = ?`).bind(id).first<Record<string, any>>();
-  if (!t) throw new HttpError(404, "Task not found");
-  return t;
-}
-
-async function getTask(ctx: Ctx) {
-  return json({ task: taskOut(await loadTask(ctx.env, ctx.params.id)) });
-}
-
-export const projectRoutes: Array<[string, string, (ctx: Ctx) => Promise<Response>]> = [
+export const projectRoutes: Route[] = [
   ["GET", "/projects", listProjects],
   ["GET", "/projects/sync-status", syncStatus],
   ["POST", "/projects/sync", manualSync],
   ["GET", "/projects/:slug", getProject],
-  ["GET", "/projects/:slug/contributions", listContributions],
-  ["GET", "/projects/:slug/tasks", (c) => listTasks(c, c.params.slug)],
-  ["GET", "/tasks", (c) => listTasks(c)],
-  ["GET", "/tasks/:id", getTask],
 ];

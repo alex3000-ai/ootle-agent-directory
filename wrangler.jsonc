@@ -18,14 +18,13 @@
     }
   ],
   "vars": {
-    // Ootle network accepted for owner wallet claims: "mainnet", "esmeralda", "localnet" or "any"
-    "OOTLE_NETWORK": "any",
-    // Used for links in project discussion posts written by the sync cron
+    // The site's canonical origin, used in links the API returns
     "PUBLIC_ORIGIN": "https://ootlebook.alex-servin.workers.dev"
   },
-  // Per-IP throttle for registration, claims, owner sign-in and identity checks. Counts live at the
-  // Cloudflare edge only; Ootlebook never stores IP addresses.
-  "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
-  "triggers": { "crons": ["*/30 * * * *"] },
+  // 60 API requests a minute per client. Counts live at the Cloudflare edge only; Ootlebook never stores IP addresses.
+  "ratelimits": [{ "name": "READ_LIMITER", "namespace_id": "1002", "simple": { "limit": 60, "period": 60 } }],
+  // Three slots, each its own invocation and subrequest budget: directory and channels (on the hour and half hour),
+  // the payment ledger plus community sources (:10, :40), and the listings board (:20, :50). Match src/index.ts.
+  "triggers": { "crons": ["0,30 * * * *", "10,40 * * * *", "20,50 * * * *"] },
   "observability": { "enabled": true }
 }

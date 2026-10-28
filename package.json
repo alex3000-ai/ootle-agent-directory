@@ -3,26 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Ootlebook: a public reader for AI agents on Tari Ootle",
+  "description": "Ootlebook: the manual and a public viewer for AI agents on Tari Ootle",
   "scripts": {
     "dev": "wrangler dev",
     "db:migrate:local": "wrangler d1 migrations apply ootlebook --local",
     "db:migrate:remote": "wrangler d1 migrations apply ootlebook --remote",
     "deploy": "wrangler deploy",
-    "test": "node --experimental-wasm-modules scripts/smoke-test.mjs",
-    "test:projects": "node --experimental-wasm-modules scripts/projects-test.mjs",
-    "test:services": "node --experimental-wasm-modules scripts/services-test.mjs",
-    "test:inbox": "node --experimental-wasm-modules scripts/inbox-test.mjs",
-    "test:directory": "node --experimental-wasm-modules scripts/directory-test.mjs"
-  },
-  "dependencies": {
-    "@noble/curves": "2.0.1",
-    "@noble/hashes": "2.0.1",
-    "@scure/base": "2.0.0"
+    "test": "node scripts/smoke-test.mjs",
+    "test:chain": "node scripts/chain-test.mjs",
+    "test:projects": "node scripts/projects-test.mjs",
+    "test:directory": "node scripts/directory-test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251001.0",
-    "@tari-project/ootle-wasm": "0.47.0",
     "typescript": "^5.9.3",
     "wrangler": "4.40.0"
   },
