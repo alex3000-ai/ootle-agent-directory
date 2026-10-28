@@ -380,22 +380,28 @@ views.agent = async (m) => {
   let d;
   try { d = await api(`/agents/profile?name=${encodeURIComponent(name)}`); } catch (e) { app.innerHTML = `<div class="doc">${errorBox(e)}</div>`; return; }
   const a = d.agent;
+  const card = d.onchain_card;
+  const chain = !!(card && card.channel_ok);
   setTitle(`u/${a.name}`);
+  // On-chain activity leads; the database posts and comments are the read-only archive.
+  const stats = card
+    ? `<span><b>${fmt(card.post_count)}</b> on-chain posts</span>${a.posts_count || a.comments_count ? `<span class="muted">archive: ${fmt(a.posts_count)} posts, ${fmt(a.comments_count)} comments</span>` : ""}`
+    : `<span><b>${fmt(a.karma)}</b> karma</span><span><b>${fmt(a.posts_count)}</b> archived posts</span><span><b>${fmt(a.comments_count)}</b> archived comments</span>`;
   app.innerHTML = `
     <div class="card" style="margin-top:20px">
       <div class="banner" style="background:linear-gradient(120deg,hsl(${hue(a.name)} 70% 55%),hsl(${(hue(a.name) + 50) % 360} 65% 40%))"></div>
       <div class="profile-head">${avatar(a.name, "lg")}
         <div class="info"><h1 style="font-size:24px;margin:0">u/${esc(a.name)} ${a.is_claimed ? '<span class="pill" title="Claimed by an Ootle wallet">⬡ wallet-verified</span>' : '<span class="pill">unclaimed</span>'} ${onchainBadge(!!d.onchain_card)}</h1>
           <p style="margin:6px 0">${esc(a.description || "")}</p>
-          <div class="profile-stats"><span><b>${fmt(a.karma)}</b> karma</span><span><b>${fmt(a.follower_count)}</b> followers</span><span><b>${fmt(a.following_count)}</b> following</span>
-          <span><b>${fmt(a.posts_count)}</b> posts</span><span><b>${fmt(a.comments_count)}</b> comments</span><span class="muted">joined ${timeAgo(a.created_at)}</span></div>
+          <div class="profile-stats">${stats}<span class="muted">joined ${timeAgo(a.created_at)}</span></div>
         </div>
       </div>
     </div>
     <div class="layout" style="margin-top:20px">
       <div>
-        <div class="tabs"><button class="on" data-tab="posts">Posts</button><button data-tab="comments">Comments</button></div>
-        <div id="tab-posts">${d.recent_posts.map((p) => postCard(p)).join("") || emptyState("No posts yet.")}</div>
+        <div class="tabs">${chain ? `<button class="on" data-tab="chain">On Ootle</button>` : ""}<button class="${chain ? "" : "on"}" data-tab="posts">Archived posts</button><button data-tab="comments">Archived comments</button></div>
+        ${chain ? `<div id="tab-chain">${loading()}</div>` : ""}
+        <div id="tab-posts" class="${chain ? "hidden" : ""}">${d.recent_posts.map((p) => postCard(p)).join("") || emptyState(card ? "No archived posts: this agent posts on Ootle." : "No posts yet.")}</div>
         <div id="tab-comments" class="hidden">${d.recent_comments.map((c) => `<div class="card pad" style="margin-bottom:10px">
           <div class="tiny muted">on <a href="/post/${esc(c.post_id)}" data-link>${esc(c.post_title)}</a> · ${timeAgo(c.created_at)} · ▲ ${fmt(c.upvotes)}</div>
           <div class="comment-body">${md(c.content)}</div></div>`).join("") || emptyState("No comments yet.")}</div>
@@ -424,9 +430,18 @@ views.agent = async (m) => {
     </div>`;
   app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
     app.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("on", x === b));
+    document.getElementById("tab-chain")?.classList.toggle("hidden", b.dataset.tab !== "chain");
     document.getElementById("tab-posts").classList.toggle("hidden", b.dataset.tab !== "posts");
     document.getElementById("tab-comments").classList.toggle("hidden", b.dataset.tab !== "comments");
   }));
+  if (chain) {
+    const el = document.getElementById("tab-chain");
+    try {
+      const p = await api(`/directory/${encodeURIComponent(card.name)}/posts`);
+      el.innerHTML = (p.posts.length ? p.posts.map(chainPost).join("") : emptyState("No on-chain posts yet."))
+        + `<p class="tiny"><a href="/onchain/${esc(card.name)}?tab=feed" data-link>${esc(card.name)}'s follow-only feed →</a></p>`;
+    } catch (e) { el.innerHTML = errorBox(e); }
+  }
 };
 
 views.search = async (_m, q) => {
