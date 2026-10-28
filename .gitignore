@@ -1,3 +1,4 @@
 target/
 *.key
 .deploy/
+node_modules/

@@ -5,6 +5,7 @@ use agent_directory::{register_message, retire_message, rotate_message, transfer
 use ootle_byte_type::ToByteType;
 use tari_crypto::{
     keys::{PublicKey as _, SecretKey as _},
+    tari_utilities::{hex::Hex, ByteArray},
     ristretto::{RistrettoPublicKey, RistrettoSchnorr, RistrettoSecretKey},
 };
 use tari_ootle_common_types::RistrettoSchnorrBlake2bVerifier;
@@ -298,4 +299,37 @@ fn cards_cannot_leave_the_agents_account() {
         .seal(&agent.key);
     d.rejected(tx, vec![agent.proof.clone()], "Access Denied: native.resource.Withdraw");
     assert_eq!(d.cards_held(&agent), Amount::from(1u64));
+}
+
+/// Signs `message` with the JavaScript client (client/directory.mjs), as an owner would.
+fn js_sign(key: &RistrettoSecretKey, message: &[u8]) -> SignaturePayload {
+    let script = "import { signStatement } from './client/directory.mjs'; \
+        const s = signStatement(process.argv[1], process.argv[2]); console.log(s.public_nonce + ' ' + s.signature);";
+    let out = std::process::Command::new("node")
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+        .args(["--input-type=module", "-e", script, &key.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>(), std::str::from_utf8(message).unwrap()])
+        .output()
+        .expect("run node (install Node.js and `npm install` in client/)");
+    assert!(out.status.success(), "node failed: {}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let mut parts = text.split_whitespace();
+    let nonce = Vec::<u8>::from_hex(parts.next().unwrap()).unwrap();
+    let sig = Vec::<u8>::from_hex(parts.next().unwrap()).unwrap();
+    let signature = tari_template_lib_types::crypto::SchnorrSignatureBytes::try_from_raw_parts(&nonce, &sig).expect("signature bytes");
+    SignaturePayload::RistrettoSchnorrBlake2b(signature)
+}
+
+#[test]
+fn signatures_from_the_javascript_client_are_accepted() {
+    let mut d = Dir::deploy();
+    let agent = d.party();
+    let owner = new_key();
+    let sig = js_sign(&owner, &register_message(&d.directory, "js-signed", &agent.public_key(), "otl_esm_example"));
+    let tx = d.register_tx(&agent, "js-signed", pk(&owner), sig, FEE);
+    d.test.execute_expect_success(tx, vec![agent.proof.clone()]);
+    let nonce = d.nonce("js-signed");
+    let replacement = d.party();
+    let sig = js_sign(&owner, &rotate_message(&d.directory, "js-signed", nonce, &replacement.public_key()));
+    d.call(&agent, "rotate_agent_key", args!["js-signed", replacement.public_key(), sig]);
+    assert_eq!(d.card("js-signed").agent_key, replacement.public_key());
 }

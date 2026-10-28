@@ -1,0 +1,9 @@
+{
+  "name": "ootle-agent-directory-client",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "ootle-directory": "directory.mjs" },
+  "scripts": { "test": "node --test test.mjs" },
+  "dependencies": { "@noble/curves": "2.0.1", "@noble/hashes": "2.0.1" }
+}
