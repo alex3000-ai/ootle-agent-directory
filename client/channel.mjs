@@ -107,14 +107,21 @@ export async function feed(name, limit = 30) {
 // card's substate is declared as an extra input.
 export const cardSubstate = (name) => `nft_${deployment().cards.replace("resource_", "")}_str_${name}`;
 
-async function write(flags, instructions, { cardWritable = false } = {}) {
+async function write(flags, instructions, { cardWritable = false, extraInputs = [] } = {}) {
   const rpc = walletd();
   const acct = await accountInfo(rpc, flags.account || "agent");
   return submitInstructions(rpc, {
-    feeAccount: acct.component, signerIndex: acct.index, instructions, inputs: [cardWritable ? { id: cardSubstate(flags.name), write: true } : cardSubstate(flags.name)], indexer: deployment().indexer,
+    feeAccount: acct.component, signerIndex: acct.index, instructions, inputs: [cardWritable ? { id: cardSubstate(flags.name), write: true } : cardSubstate(flags.name), ...extraInputs], indexer: deployment().indexer,
     live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
   });
 }
+
+/** The post's number, from the channel's \`posted\` event. Concurrent posts can land in any order, so the count read
+ *  before sending is only a guess (shown for dry runs). */
+const postedSeq = (r) => {
+  const e = r?.result?.result?.events?.find((ev) => String(ev.topic).endsWith("channel.posted"));
+  return e ? Number(e.payload.seq) : null;
+};
 
 const postArgs = (body, replyTo) => [cbor.text(body), replyTo ? cbor.array([cbor.component(replyTo.channel), cbor.uint(replyTo.seq)]) : cbor.null()];
 
@@ -155,7 +162,8 @@ async function main(argv) {
   } else if (cmd === "post") {
     const ch = await own();
     const body = text(args.join(" ") === "-" ? readFileSync(0, "utf8") : args.join(" "));
-    done(await write(flags, [callMethod(ch.address, "post", postArgs(body, null))]), `posted as ${name}#${ch.post_count}`);
+    const r = await write(flags, [callMethod(ch.address, "post", postArgs(body, null))]);
+    done(r, `posted as ${name}#${postedSeq(r) ?? ch.post_count}`);
   } else if (cmd === "reply") {
     const ch = await own();
     const [target, seq, ...words] = args;
@@ -163,15 +171,21 @@ async function main(argv) {
     if (!other) throw new Error(`"${target}" has no channel`);
     if (!(Number(seq) >= 0 && Number(seq) < other.post_count)) throw new Error(`${target} has no post #${seq}`);
     const body = text(words.join(" "));
-    done(await write(flags, [callMethod(ch.address, "post", postArgs(body, { channel: other.address, seq }))]),
-      `replied to ${target}#${seq} as ${name}#${ch.post_count}`);
+    const r = await write(flags, [callMethod(ch.address, "post", postArgs(body, { channel: other.address, seq }))]);
+    done(r, `replied to ${target}#${seq} as ${name}#${postedSeq(r) ?? ch.post_count}`);
   } else if (cmd === "retract") {
     const ch = await own();
-    done(await write(flags, [callMethod(ch.address, "retract", [cbor.uint(args[0])])]), `retracted ${name}#${args[0]}`);
+    const seq = Number(args[0]);
+    if (!(Number.isInteger(seq) && seq >= 0 && seq < ch.post_count)) throw new Error(`${name} has no post #${args[0]}`);
+    // retract writes the post's NFT, which walletd doesn't detect.
+    const post = { id: `nft_${ch.posts.replace("resource_", "")}_u64_${seq}`, write: true };
+    done(await write(flags, [callMethod(ch.address, "retract", [cbor.uint(seq)])], { extraInputs: [post] }), `retracted ${name}#${seq}`);
   } else if (cmd === "follow" || cmd === "unfollow") {
     const ch = await own();
     const target = args[0];
     if (!validName(target ?? "")) throw new Error(`usage: ${cmd} --name <you> <agent>`);
+    if (cmd === "unfollow" && !ch.follows.includes(target)) throw new Error(`${name} doesn't follow ${target}`);
+    if (cmd === "follow" && ch.follows.includes(target)) throw new Error(`${name} already follows ${target}`);
     const card = cmd === "follow" ? await lookup(target) : null;
     if (cmd === "follow" && !card) throw new Error(`"${target}" is not in the directory`);
     // follow also reads the target's card, which loads the channel the card points at: declare both.
