@@ -114,7 +114,23 @@ export function verifyStatement({ message, public_key, public_nonce, signature }
 /** The `SignaturePayload` argument for a manifest. */
 export const manifestSig = ({ public_nonce, signature }) => `cbor!([0, [[public_key!("${checkKey(public_nonce, "nonce")}"), hex_bytes!("${checkKey(signature, "signature")}")]]])`;
 
-// Manifest string literals: only plain printable text, so nothing can break out of the quotes.
+/** Any text as a Rust string literal for a manifest: quotes, backslashes and control characters escaped. */
+export function rustString(s) {
+  let out = '"';
+  for (const ch of String(s)) {
+    const c = ch.codePointAt(0);
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch === "\t") out += "\\t";
+    else if (c < 0x20 || c === 0x7f || (c >= 0x80 && c < 0xa0)) out += `\\u{${c.toString(16)}}`;
+    else out += ch;
+  }
+  return out + '"';
+}
+
+// Names and addresses: only plain printable text.
 const literal = (s, what) => {
   if (!/^[\x20-\x7e]*$/.test(s) || /["\\]/.test(s)) throw new Error(`${what} may only contain printable ASCII without quotes or backslashes`);
   return `"${s}"`;
@@ -130,7 +146,7 @@ fn main() {
     let agent = var!["agent"];
     let directory = var!["directory"];
     let fee = agent.withdraw(TARI, amount!(${BigInt(fee.name_fee)}));
-    let card = directory.register(${literal(name, "name")}, public_key!("${checkKey(ownerKey, "owner key")}"), ${literal(messaging, "messaging address")}, ${literal(description, "description")}, ${manifestSig(sig)}, fee);
+    let card = directory.register(${literal(name, "name")}, public_key!("${checkKey(ownerKey, "owner key")}"), ${literal(messaging, "messaging address")}, ${rustString(description)}, ${manifestSig(sig)}, fee);
     agent.deposit(card);
 }
 `;
@@ -148,7 +164,7 @@ export function deployment() {
   };
 }
 
-async function indexer(path) {
+export async function indexer(path) {
   const { indexer: base } = deployment();
   const res = await fetch(`${base}${path}`, { headers: { accept: "application/json" } });
   if (res.status === 404) return null;
@@ -156,7 +172,7 @@ async function indexer(path) {
   return res.json();
 }
 
-const cborHex = (v) => (v && typeof v === "object" && v["@cbor"] === "bytes" ? v.hex : v && v["@cbor"] === "tag" ? cborHex(v.value) : null);
+export const cborHex = (v) => (v && typeof v === "object" && v["@cbor"] === "bytes" ? v.hex : v && v["@cbor"] === "tag" ? cborHex(v.value) : null);
 
 /**
  * Decodes an agent card substate as the indexer serves it: `data` is [name, registered_epoch] and
@@ -216,7 +232,7 @@ export async function list({ limit = 100 } = {}) {
 
 // ---- wallet daemon ----
 
-function walletd() {
+export function walletd() {
   const url = process.env.WALLETD_URL || "http://127.0.0.1:5102/json_rpc";
   const token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
   let id = 0;
@@ -232,7 +248,7 @@ function walletd() {
   };
 }
 
-async function accountInfo(rpc, name) {
+export async function accountInfo(rpc, name) {
   const { accounts } = await rpc("accounts.list", { offset: 0, limit: 100 });
   const a = accounts.find((x) => x.account.name === name);
   if (!a) throw new Error(`no walletd account named "${name}"`);

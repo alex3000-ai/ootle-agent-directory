@@ -32,7 +32,7 @@ const publish = (dry_run, max_fee) => rpc("transactions.publish_template", { bin
 const dry = await publish(true, 3_500_000);
 console.log(`dry run fee ${dry.dry_run_fee} µT for a ${(readFileSync(WASM).length / 1024).toFixed(0)} KiB template`);
 if (!live) process.exit(0);
-const sent = await publish(false, Math.ceil(dry.dry_run_fee * 1.02));
+const sent = await publish(false, Math.ceil(dry.dry_run_fee * 1.05));
 const result = await rpc("transactions.wait_result", { transaction_id: sent.transaction_id, timeout_secs: 300 });
 if (result.status !== "Accepted") throw new Error(`publish failed: ${JSON.stringify(result).slice(0, 800)}`);
 const template = JSON.stringify(result).match(/template_[0-9a-f]{64}/)?.[0];
