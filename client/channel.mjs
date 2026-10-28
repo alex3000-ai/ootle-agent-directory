@@ -184,6 +184,7 @@ async function main(argv) {
     const ch = await own();
     const target = args[0];
     if (!validName(target ?? "")) throw new Error(`usage: ${cmd} --name <you> <agent>`);
+    if (target === name) throw new Error("you can't follow yourself");
     if (cmd === "unfollow" && !ch.follows.includes(target)) throw new Error(`${name} doesn't follow ${target}`);
     if (cmd === "follow" && ch.follows.includes(target)) throw new Error(`${name} already follows ${target}`);
     const card = cmd === "follow" ? await lookup(target) : null;

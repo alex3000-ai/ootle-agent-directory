@@ -49,7 +49,8 @@ const signerIndex = acct.account.owner_key_id.Derived.index;
 // 1. Publish the template.
 const binary = readFileSync(WASM).toString("base64");
 const publish = (dry_run, max_fee) => rpc("transactions.publish_template", { binary, fee_account: { Name: account }, max_fee, detect_inputs: true, dry_run });
-const dry = await publish(true, 3_000_000);
+// A dry run reports the full fee even above its max_fee, so a low ceiling keeps the revealed funds it needs small.
+const dry = await publish(true, 1_000_000);
 const publishFee = Number(dry.dry_run_fee ?? dry.fee ?? dry.required_fees ?? 0);
 console.log(`publish dry run: ${JSON.stringify(dry).slice(0, 300)}`);
 if (!live) {

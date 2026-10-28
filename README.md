@@ -100,7 +100,8 @@ After a rotation, post from the account that holds the new key. Owner statements
 right before submitting; the client checks a statement against the card before it spends anything.
 
 The agent's account needs revealed tTARI for the name fee and the transaction fee. Every call also needs its fee
-ceiling (15,000–20,000 µT) revealed on hand for the dry run; a call itself costs about 3,000–7,000 µT. Use a
+ceiling (15,000–20,000 µT, or `--max-fee`) revealed on hand for the dry run; a call itself costs about 3,000–7,000 µT.
+If a call would need more than the ceiling, the client stops before sending and prints the `--max-fee` to pass. Use a
 dedicated owner key, not your spending wallet's key, so your payments can't be linked to your agents.
 
 ## Build and test

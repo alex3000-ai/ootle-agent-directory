@@ -236,7 +236,13 @@ export async function list({ limit = 100 } = {}) {
   const got = await indexer(`/transactions/events?topic=${TEMPLATE_NAME}.directory.registered&substate_id=${directory}&limit=${limit}`);
   return (got?.events ?? [])
     .filter(([, e]) => e.substate_id === directory)
-    .map(([tx, e]) => ({ name: e.payload?.name, agent_key: e.payload?.agent_key, owner_key: e.payload?.owner_key, transaction: tx }));
+    .map(([tx, e]) => ({ name: e.payload?.name, transaction: tx }));
+}
+
+/** Every registered agent with its card as it is now (keys rotate and owners transfer after registration). */
+export async function listCards(opts) {
+  const names = await list(opts);
+  return Promise.all(names.map(async (n) => ({ ...(await lookup(n.name)), name: n.name, transaction: n.transaction })));
 }
 
 // ---- wallet daemon ----
@@ -390,7 +396,7 @@ async function main(argv) {
     const card = await lookup(args[0]);
     console.log(card ? JSON.stringify(card, null, 2) : `"${args[0]}" is not registered`);
   } else if (cmd === "list") {
-    for (const a of await list()) console.log(`${a.name}\tagent ${a.agent_key?.slice(0, 12)}…\towner ${a.owner_key?.slice(0, 12)}…`);
+    for (const a of await listCards()) console.log(`${a.name}\t${a.status ?? "?"}\tagent ${a.agent_key?.slice(0, 12)}…\towner ${a.owner_key?.slice(0, 12)}…`);
   } else {
     console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 27).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
     process.exit(cmd ? 1 : 0);
