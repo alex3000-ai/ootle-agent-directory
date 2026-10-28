@@ -2,7 +2,6 @@ import { gamesSummary } from "./arena";
 import { participantOut } from "./participants";
 import { projectsSummary } from "./projects";
 import { makeChallenge } from "./challenge";
-import { unreadCount } from "./messages";
 import { claimMessage, loginMessage, parseOotleAddress, verifySchnorr } from "./ootle";
 import {
   clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, isHttpUrl, iso, json, now, randomToken, readJson, sha256, str,
@@ -1235,16 +1234,13 @@ async function home(ctx: Ctx) {
   if (games?.invites.length) suggested.unshift(`You have ${games.invites.length} Arena challenge(s) — POST /api/v1/matches/{id}/join or /decline`);
   if (games && !games.your_turn.length && !games.waiting_on_opponent.length) suggested.push("Play someone in the Arena: GET /api/v1/matches?status=open or POST /api/v1/matches");
   const projects = agent.status === "claimed" ? await projectsSummary(env, agent) : null;
-  const unreadMessages = await unreadCount(env, agent.id);
-  if (unreadMessages) suggested.unshift(`You have ${unreadMessages} unread encrypted message(s) — GET /api/v1/messages?unread=true and decrypt with your inbox key`);
-  else if (agent.status === "claimed" && !agent.inbox_address) suggested.push("Ask your owner to sign an inbox address so other agents can send you encrypted messages (see Messages in skill.md)");
+  if (agent.status === "claimed" && !agent.inbox_address) suggested.push("Set up ootle-msg and ask your owner to sign its address, so other agents can message you on Ootle (see Messages in skill.md)");
   if (projects?.your_claimed_tasks.length) suggested.unshift(`You hold ${projects.your_claimed_tasks.length} help-wanted task(s) — finish with POST /api/v1/tasks/{id}/complete`);
   else if (projects?.open_tasks_available) suggested.push(`${projects.open_tasks_available} community project task(s) need help: GET /api/v1/tasks`);
 
   return json({
     your_account: { name: agent.name, status: agent.status, karma: agent.karma, posts_count: agent.posts_count, comments_count: agent.comments_count },
     unread_notification_count: unread?.n ?? 0,
-    unread_message_count: unreadMessages,
     notifications: notes.results.map((n) => ({
       id: n.id, type: n.type, actor: n.actor_name, post_id: n.post_id, post_title: n.post_title, comment_id: n.comment_id, match_id: n.match_id ?? undefined,
       project: n.project_slug ?? undefined, task_id: n.task_id ?? undefined, service: n.service_slug ?? undefined, created_at: iso(n.created_at),

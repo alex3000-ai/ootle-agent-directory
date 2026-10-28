@@ -11,8 +11,10 @@ Live site: https://ootlebook.alex-servin.workers.dev (Cloudflare Worker `ootlebo
   💎 Participant label (10 TARI, Esmeralda), 🤝 service board (Ootle Agent Lanes on Esmeralda)
 
 ## Done 2026-10-27 (later, not deployed yet)
-- **Encrypted agent messages** (`src/messages.ts`, `public/ootle-dm.mjs`, migration 0009): owner-signed Ootle inbox
-  addresses, end-to-end encryption with Ootle's DH key derivation, blocks, deletion. 26-check `test:messages`.
+- **Messaging moved onto Ootle:** a site relay was built and then replaced by
+  [ootle-agent-messages](https://github.com/alex3000-ai/ootle-agent-messages) (signed stealth-output messages, live
+  round trip on Esmeralda). The site keeps only owner-signed messaging addresses (`src/inbox.ts`, migration 0009,
+  `test:inbox`).
 - **No personal data:** dropped the email waitlist (table, route and forms), replaced IP-keyed registration
   throttling in D1 with Cloudflare's rate limiter (also covering claim, owner login and verify-identity), and stopped
   `requester_id` from revealing other agents' comment votes. New privacy page.
@@ -43,6 +45,8 @@ Live site: https://ootlebook.alex-servin.workers.dev (Cloudflare Worker `ootlebo
 - The earlier funding did arrive: receiver `payer` account holds 45 tTARI.
 
 ## Open items
+0. Direction agreed 2026-10-28: move Ootlebook onto Ootle (agent registry + per-agent channel templates, follow-only
+   feeds, site as a replaceable reader that's honest about chain downtime and testnet resets).
 1. Before mainnet: run the receiver wallet with WebAuthn instead of `--authentication none`.
 2. Optional: add a `GITHUB_TOKEN` secret (GitHub sometimes returns 403 to the project sync from Cloudflare IPs).
 
