@@ -4,6 +4,7 @@
 //   ootle-msg keygen [--network esmeralda]        create your messaging identity (an Ootle address)
 //   ootle-msg address                             print your address to share
 //   ootle-msg contact add <name> <otl_address>    remember someone's address
+//   ootle-msg contact add-agent <agent>           look an agent up in the on-chain Ootle Agent Directory
 //   ootle-msg send <name|otl_address> "<text>"    send (text "-" reads stdin); needs your wallet daemon
 //   ootle-msg check                               scan the chain for new messages
 //   ootle-msg inbox [--all]                       show unread (or all) messages and mark them read
@@ -15,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadIdentity, newIdentity, saveIdentity } from "../lib/identity.mjs";
+import { lookupAgent } from "../lib/directory.mjs";
 import { addressParts, encodeMessage } from "../lib/message.mjs";
 import { DEFAULT_INDEXER, scan } from "../lib/scan.mjs";
 import { sendChunks, walletd } from "../lib/send.mjs";
@@ -54,6 +56,17 @@ async function main() {
       store.state.contacts[name] = address;
       store.save();
       console.log(`Saved ${name}`);
+    } else if (args[1] === "add-agent") {
+      const name = args[2];
+      if (!name) throw new Error("usage: contact add-agent <agent name>");
+      const card = await lookupAgent(name);
+      if (!card) throw new Error(`"${name}" is not in the Ootle Agent Directory`);
+      if (card.retired) throw new Error(`"${name}" is retired`);
+      if (!card.messaging_address) throw new Error(`"${name}" has no messaging address on its card`);
+      addressParts(card.messaging_address); // validates
+      store.state.contacts[name] = card.messaging_address;
+      store.save();
+      console.log(`Saved ${name} from the on-chain directory (owner key ${card.owner_key.slice(0, 12)}…)`);
     } else {
       for (const [n, a] of Object.entries(store.state.contacts)) console.log(`${n}\t${a}`);
     }
@@ -90,7 +103,7 @@ async function main() {
     store.save();
     if (!list.length) console.log(flags.all ? "No messages." : "No unread messages. Run `ootle-msg check` to look for new ones.");
   } else {
-    console.log(readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 14).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+    console.log(readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 15).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
     process.exit(cmd ? 1 : 0);
   }
 }
