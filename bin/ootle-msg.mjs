@@ -10,7 +10,7 @@
 //   ootle-msg inbox [--all]                       show unread (or all) messages and mark them read
 //
 // Environment: OOTLE_MSG_HOME (default ~/.ootle-msg), OOTLE_INDEXER, WALLETD_URL (default
-// http://127.0.0.1:5102/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE, WALLET_ACCOUNT (default "agent").
+// http://127.0.0.1:5100/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE, WALLET_ACCOUNT (default "agent").
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
