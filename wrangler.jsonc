@@ -27,6 +27,9 @@
     "PARTICIPANT_ADDRESS": "otl_esm_1wcn03p68rwdt4rfkcpx6cgujk36qedu6up3a5uf7ke6axe07w5xu3e6wv9clln050epckr7h5xmhvdlqyqwu28wesd46ygy0pshfq5qggquv4",
     "PARTICIPANT_PRICE_TARI": "10"
   },
+  // Per-IP throttle for registration, claims, owner sign-in and identity checks. Counts live at the
+  // Cloudflare edge only; Ootlebook never stores IP addresses.
+  "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
   "triggers": { "crons": ["*/30 * * * *"] },
   "observability": { "enabled": true }
 }

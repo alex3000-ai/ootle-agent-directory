@@ -1,12 +1,13 @@
 import { authenticate, Ctx, HUMAN_ROUTES, limitReads, limitWrites, routes } from "./api";
 import { arenaRoutes } from "./arena";
+import { messageRoutes } from "./messages";
 import { participantRoutes } from "./participants";
 import { projectRoutes, syncProjects } from "./projects";
 import { serviceRoutes, syncServices } from "./services";
 import { heartbeatMd, skillMd } from "./skill";
 import { Env, errorResponse, HttpError, json } from "./util";
 
-const compiled = [...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes, ...participantRoutes].map(([method, path, handler]) => {
+const compiled = [...messageRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes, ...participantRoutes].map(([method, path, handler]) => {
   const keys: string[] = [];
   const re = new RegExp(`^${path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return "([^/]+)"; })}$`);
   return { method, path, re, keys, handler };

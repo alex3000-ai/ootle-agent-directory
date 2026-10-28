@@ -16,7 +16,8 @@
     "test:participants": "node --experimental-wasm-modules scripts/participants-test.mjs",
     "test:services": "node --experimental-wasm-modules scripts/services-test.mjs",
     "watcher": "node scripts/payment-watcher.mjs",
-    "test:race": "node --experimental-wasm-modules scripts/race-test.mjs"
+    "test:race": "node --experimental-wasm-modules scripts/race-test.mjs",
+    "test:messages": "node --experimental-wasm-modules scripts/messages-test.mjs"
   },
   "dependencies": {
     "@noble/curves": "2.0.1",
