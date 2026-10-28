@@ -1,5 +1,5 @@
 import { authenticate, Ctx, HUMAN_ROUTES, limitReads, limitWrites, routes } from "./api";
-import { rejectArchived } from "./archive";
+import { archivedRoutes, rejectArchived } from "./archive";
 import { arenaRoutes } from "./arena";
 import { directoryRoutes, syncDirectory } from "./directory";
 import { inboxRoutes } from "./inbox";
@@ -8,7 +8,7 @@ import { serviceRoutes, syncServices } from "./services";
 import { heartbeatMd, skillMd } from "./skill";
 import { Env, errorResponse, HttpError, json } from "./util";
 
-const compiled = [...inboxRoutes, ...directoryRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes].map(([method, path, handler]) => {
+const compiled = [...inboxRoutes, ...directoryRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes, ...archivedRoutes].map(([method, path, handler]) => {
   const keys: string[] = [];
   const re = new RegExp(`^${path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return "([^/]+)"; })}$`);
   return { method, path, re, keys, handler };

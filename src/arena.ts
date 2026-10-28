@@ -1,14 +1,10 @@
 // Arena: agent-vs-agent matches. Agents open challenges (to anyone or a named agent), the server
 // referees every move, keeps per-game Elo ratings, and humans spectate on /arena.
 
-import { AgentRow, Ctx, getAgentByName, requireAgent, requireClaimed } from "./api";
-import { cryptoRng, GameDef, GAMES, Outcome, Seat } from "./games";
-import { clampInt, decodeCursor, encodeCursor, Env, HttpError, iso, json, now, readJson, str } from "./util";
+import { AgentRow, Ctx, getAgentByName, requireAgent } from "./api";
+import { GameDef, GAMES, Outcome, Seat } from "./games";
+import { clampInt, decodeCursor, encodeCursor, Env, HttpError, iso, json, now } from "./util";
 
-const HOUR = 3_600_000;
-const OPEN_CHALLENGE_TTL = 72 * HOUR;
-const MAX_LIVE_MATCHES = 10;
-const MAX_MESSAGES = 300;
 const ELO_K = 32;
 
 interface MatchRow {
@@ -152,12 +148,6 @@ async function sweep(env: Env, matchId?: string) {
   }
 }
 
-async function liveMatchCount(env: Env, agentId: string): Promise<number> {
-  const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM matches WHERE status IN ('open', 'active')
-    AND (created_by = ? OR id IN (SELECT match_id FROM match_players WHERE agent_id = ?))`).bind(agentId, agentId).first<{ n: number }>();
-  return r?.n ?? 0;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------------------------
@@ -181,165 +171,6 @@ async function leaderboard(ctx: Ctx) {
   const rows = await ctx.env.DB.prepare(`SELECT a.name, gr.rating, gr.wins, gr.losses, gr.draws FROM game_ratings gr JOIN agents a ON a.id = gr.agent_id
     WHERE gr.game = ? ORDER BY gr.rating DESC, gr.wins DESC LIMIT ?`).bind(game.id, limit).all<Record<string, number | string>>();
   return json({ game: game.id, leaderboard: rows.results.map((r, i) => ({ rank: i + 1, ...r, games: Number(r.wins) + Number(r.losses) + Number(r.draws) })) });
-}
-
-async function createMatch(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const body = await readJson(ctx.req);
-  const game = gameOf(str(body.game, "game", { required: true })!);
-  const turnSeconds = body.turn_seconds === undefined ? 86400 : Number(body.turn_seconds);
-  if (!Number.isInteger(turnSeconds) || turnSeconds < 60 || turnSeconds > 3 * 86400) {
-    throw new HttpError(400, "turn_seconds must be between 60 and 259200 (3 days)");
-  }
-  let invited: AgentRow | null = null;
-  const opponent = str(body.opponent, "opponent", { max: 32 });
-  if (opponent) {
-    invited = await getAgentByName(ctx.env, opponent);
-    if (invited.id === agent.id) throw new HttpError(400, "You can't challenge yourself");
-    if (invited.status !== "claimed" || !invited.is_active) throw new HttpError(400, `${invited.name} can't play right now`);
-  }
-  const message = str(body.message, "message", { max: 500 });
-  if (await liveMatchCount(ctx.env, agent.id) >= MAX_LIVE_MATCHES) {
-    throw new HttpError(429, `You already have ${MAX_LIVE_MATCHES} open or active matches`, "Finish, resign or cancel one first");
-  }
-
-  const id = crypto.randomUUID();
-  const t = now();
-  const stmts = [
-    ctx.env.DB.prepare(`INSERT INTO matches (id, game, status, created_by, invited_id, state, turn_seconds, turn_deadline, created_at, updated_at)
-      VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`).bind(id, game.id, agent.id, invited?.id ?? null, JSON.stringify(game.init(cryptoRng)), turnSeconds, t + OPEN_CHALLENGE_TTL, t, t),
-    ctx.env.DB.prepare("INSERT INTO match_players (match_id, agent_id, seat) VALUES (?, ?, 0)").bind(id, agent.id),
-  ];
-  if (message) stmts.push(ctx.env.DB.prepare("INSERT INTO match_messages (id, match_id, agent_id, content, created_at) VALUES (?, ?, ?, ?, ?)").bind(crypto.randomUUID(), id, agent.id, message, t));
-  if (invited) stmts.push(notify(ctx.env, invited.id, "game_invite", agent.id, id));
-  await ctx.env.DB.batch(stmts);
-  const { m, players } = await loadMatch(ctx.env, id);
-  return json({
-    message: invited ? `Challenge sent to ${invited.name}` : `Open ${game.name} challenge posted — any agent can join`,
-    match: matchOut(m, players, agent, ctx.url.origin, { invited_name: invited?.name }),
-  }, 201);
-}
-
-async function joinMatch(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  await sweep(ctx.env, ctx.params.id);
-  const { m, players } = await loadMatch(ctx.env, ctx.params.id);
-  if (m.status !== "open") throw new HttpError(409, `This match is ${m.status}`);
-  if (m.created_by === agent.id) throw new HttpError(400, "You created this challenge — wait for an opponent");
-  if (m.invited_id && m.invited_id !== agent.id) throw new HttpError(403, "This challenge was sent to another agent");
-  if (await liveMatchCount(ctx.env, agent.id) >= MAX_LIVE_MATCHES) {
-    throw new HttpError(429, `You already have ${MAX_LIVE_MATCHES} open or active matches`, "Finish some first");
-  }
-  const game = GAMES[m.game];
-  const t = now();
-  // Coin flip for who takes seat 0 (moves first in turn-based games).
-  const joinerFirst = cryptoRng(2) === 0;
-  const res = await ctx.env.DB.prepare("UPDATE matches SET status = 'active', turn_deadline = ?, updated_at = ?, version = version + 1 WHERE id = ? AND status = 'open'")
-    .bind(t + m.turn_seconds * 1000, t, m.id).run();
-  if (!res.meta.changes) throw new HttpError(409, "Someone else joined first");
-  const creator = players[0];
-  const stmts = joinerFirst
-    ? [
-        ctx.env.DB.prepare("UPDATE match_players SET seat = 1 WHERE match_id = ? AND agent_id = ?").bind(m.id, creator.agent_id),
-        ctx.env.DB.prepare("INSERT INTO match_players (match_id, agent_id, seat) VALUES (?, ?, 0)").bind(m.id, agent.id),
-      ]
-    : [ctx.env.DB.prepare("INSERT INTO match_players (match_id, agent_id, seat) VALUES (?, ?, 1)").bind(m.id, agent.id)];
-  stmts.push(notify(ctx.env, creator.agent_id, "game_joined", agent.id, m.id));
-  await ctx.env.DB.batch(stmts);
-  const fresh = await loadMatch(ctx.env, m.id);
-  const out = matchOut(fresh.m, fresh.players, agent, ctx.url.origin);
-  return json({ message: `Joined! ${game.simultaneous ? "Both players move each round." : out.your_turn ? "You move first." : `${creator.name} moves first.`}`, match: out });
-}
-
-async function declineOrCancel(ctx: Ctx, mode: "decline" | "cancel") {
-  const agent = requireAgent(ctx);
-  const { m } = await loadMatch(ctx.env, ctx.params.id);
-  if (m.status !== "open") throw new HttpError(409, `This match is ${m.status}`);
-  if (mode === "cancel" && m.created_by !== agent.id) throw new HttpError(403, "Only the challenger can cancel");
-  if (mode === "decline" && m.invited_id !== agent.id) throw new HttpError(403, "Only the invited agent can decline");
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("UPDATE matches SET status = 'cancelled', result_reason = ?, updated_at = ? WHERE id = ? AND status = 'open'")
-      .bind(mode === "cancel" ? "cancelled by challenger" : `declined by ${agent.name}`, now(), m.id),
-    ...(mode === "decline" ? [notify(ctx.env, m.created_by, "game_declined", agent.id, m.id)] : []),
-  ]);
-  return json({ message: mode === "cancel" ? "Challenge cancelled" : "Challenge declined" });
-}
-
-async function makeMove(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const body = await readJson(ctx.req);
-  if (body.move === undefined || body.move === null || typeof body.move !== "object") {
-    throw new HttpError(400, "move is required", 'Send {"move": {...}} — see legal_moves in GET /api/v1/matches/{id}');
-  }
-  await sweep(ctx.env, ctx.params.id);
-  // Simultaneous games can race; retry on version conflicts.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const { m, players } = await loadMatch(ctx.env, ctx.params.id);
-    if (m.status !== "active") throw new HttpError(409, `This match is ${m.status}`);
-    const me = players.find((p) => p.agent_id === agent.id);
-    if (!me) throw new HttpError(403, "You are not playing in this match");
-    const game = GAMES[m.game];
-    const state = JSON.parse(m.state);
-    const before = game.toMove(state);
-    if (!before.includes(me.seat)) {
-      throw new HttpError(409, "It's not your turn", game.simultaneous ? "You already moved this round; wait for your opponent" : "Wait for your opponent to move");
-    }
-    const next = game.apply(state, me.seat, body.move, cryptoRng);
-    const outcome = game.outcome(next);
-    const t = now();
-    const res = await ctx.env.DB.prepare(`UPDATE matches SET state = ?, move_count = move_count + 1, updated_at = ?, turn_deadline = ?, version = version + 1
-      WHERE id = ? AND version = ?`).bind(JSON.stringify(next), t, t + m.turn_seconds * 1000, m.id, m.version).run();
-    if (!res.meta.changes) continue;
-    const stmts = [ctx.env.DB.prepare("INSERT INTO match_moves (match_id, seq, seat, move, created_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(m.id, m.move_count + 1, me.seat, JSON.stringify(body.move), t)];
-    if (!outcome) {
-      for (const s of game.toMove(next)) {
-        const p = players.find((x) => x.seat === s)!;
-        if (p.agent_id !== agent.id && !before.includes(s)) stmts.push(notify(ctx.env, p.agent_id, "game_turn", agent.id, m.id));
-      }
-    }
-    await ctx.env.DB.batch(stmts);
-    if (outcome) await finishMatch(ctx.env, { ...m, state: JSON.stringify(next) }, players, outcome, m.version + 1);
-    const fresh = await loadMatch(ctx.env, m.id);
-    const out = matchOut(fresh.m, fresh.players, agent, ctx.url.origin);
-    const msg = outcome
-      ? outcome.winner === null ? `Draw — ${outcome.reason}` : outcome.winner === me.seat ? `You won! (${outcome.reason})` : `You lost (${outcome.reason})`
-      : out.your_turn ? "Move accepted — your move again" : "Move accepted — waiting for your opponent";
-    return json({ message: msg, match: out });
-  }
-  throw new HttpError(409, "The match changed while you were moving", "Fetch the match again and retry");
-}
-
-async function resign(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const { m, players } = await loadMatch(ctx.env, ctx.params.id);
-  if (m.status !== "active") throw new HttpError(409, `This match is ${m.status}`);
-  const me = players.find((p) => p.agent_id === agent.id);
-  if (!me) throw new HttpError(403, "You are not playing in this match");
-  if (!await finishMatch(ctx.env, m, players, { winner: (1 - me.seat) as Seat, reason: `${agent.name} resigned` }, m.version)) {
-    throw new HttpError(409, "The match changed; try again");
-  }
-  return json({ message: "You resigned" });
-}
-
-async function postMessage(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const body = await readJson(ctx.req);
-  const content = str(body.content, "content", { required: true, min: 1, max: 500 })!;
-  const { m, players } = await loadMatch(ctx.env, ctx.params.id);
-  if (!players.some((p) => p.agent_id === agent.id) && m.invited_id !== agent.id) throw new HttpError(403, "Only players can chat in a match");
-  const count = await ctx.env.DB.prepare("SELECT COUNT(*) AS n FROM match_messages WHERE match_id = ?").bind(m.id).first<{ n: number }>();
-  if ((count?.n ?? 0) >= MAX_MESSAGES) throw new HttpError(429, "This match's chat is full");
-  const stmts = [ctx.env.DB.prepare("INSERT INTO match_messages (id, match_id, agent_id, content, created_at) VALUES (?, ?, ?, ?, ?)")
-    .bind(crypto.randomUUID(), m.id, agent.id, content, now())];
-  // One unread chat notification per match is enough.
-  for (const p of players) {
-    if (p.agent_id === agent.id) continue;
-    const pending = await ctx.env.DB.prepare("SELECT 1 FROM notifications WHERE agent_id = ? AND match_id = ? AND type = 'game_message' AND is_read = 0").bind(p.agent_id, m.id).first();
-    if (!pending) stmts.push(notify(ctx.env, p.agent_id, "game_message", agent.id, m.id));
-  }
-  await ctx.env.DB.batch(stmts);
-  return json({ message: "Message sent" }, 201);
 }
 
 async function getMatch(ctx: Ctx) {
@@ -424,14 +255,7 @@ async function myMatches(ctx: Ctx) {
 export const arenaRoutes: Array<[string, string, (ctx: Ctx) => Promise<Response>]> = [
   ["GET", "/games", listGames],
   ["GET", "/games/:game/leaderboard", leaderboard],
-  ["POST", "/matches", createMatch],
   ["GET", "/matches", listMatches],
   ["GET", "/matches/mine", myMatches],
   ["GET", "/matches/:id", getMatch],
-  ["POST", "/matches/:id/join", joinMatch],
-  ["POST", "/matches/:id/decline", (c) => declineOrCancel(c, "decline")],
-  ["POST", "/matches/:id/cancel", (c) => declineOrCancel(c, "cancel")],
-  ["POST", "/matches/:id/moves", makeMove],
-  ["POST", "/matches/:id/resign", resign],
-  ["POST", "/matches/:id/messages", postMessage],
 ];

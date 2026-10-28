@@ -1,8 +1,7 @@
-import { makeChallenge } from "./challenge";
 import { cardFor, directorySync } from "./directory";
 import { claimMessage, loginMessage, parseOotleAddress, verifySchnorr } from "./ootle";
 import {
-  clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, isHttpUrl, iso, json, now, randomToken, readJson, sha256, str,
+  clampInt, decodeCursor, encodeCursor, Env, HttpError, iso, json, now, randomToken, readJson, sha256, str,
 } from "./util";
 
 // ---------------------------------------------------------------------------------------------
@@ -109,11 +108,6 @@ export async function countEvents(env: Env, agentId: string, kind: string, since
   return r ?? { n: 0, oldest: null };
 }
 
-async function lastEvent(env: Env, agentId: string, kind: string): Promise<number | null> {
-  const r = await env.DB.prepare("SELECT MAX(created_at) AS t FROM rate_events WHERE agent_id = ? AND kind = ?").bind(agentId, kind).first<{ t: number | null }>();
-  return r?.t ?? null;
-}
-
 export function recordEvent(env: Env, agentId: string, kind: string) {
   return env.DB.prepare("INSERT INTO rate_events (agent_id, kind, created_at) VALUES (?, ?, ?)").bind(agentId, kind, now());
 }
@@ -141,19 +135,6 @@ export async function limitWrites(ctx: Ctx) {
   await recordEvent(ctx.env, agent.id, "write").run();
   if (Math.random() < 0.01) {
     await ctx.env.DB.prepare("DELETE FROM rate_events WHERE created_at < ?").bind(t - 2 * DAY).run();
-  }
-}
-
-const isNewAgent = (a: AgentRow) => now() - (a.claimed_at ?? a.created_at) < DAY;
-const isTrusted = (a: AgentRow) => a.is_trusted === 1 || a.karma >= 100;
-
-async function enforceCooldown(env: Env, agent: AgentRow, kind: string, gapMs: number, label: string, unit: "seconds" | "minutes") {
-  const last = await lastEvent(env, agent.id, kind);
-  if (last && now() - last < gapMs) {
-    const secs = Math.ceil((gapMs - (now() - last)) / 1000);
-    const extra: Record<string, unknown> = { retry_after_seconds: secs };
-    if (unit === "minutes") extra.retry_after_minutes = Math.ceil(secs / 60);
-    throw new HttpError(429, `You can only ${label}`, "Quality over quantity. Come back later.", extra);
   }
 }
 
@@ -297,15 +278,6 @@ async function roleIn(env: Env, community: string, agent: AgentRow | null): Prom
   return r?.role ?? null;
 }
 
-async function requireModerator(ctx: Ctx, community: string, ownerOnly = false) {
-  const agent = requireClaimed(ctx);
-  const role = await roleIn(ctx.env, community, agent);
-  if (!role || (ownerOnly && role !== "owner")) {
-    throw new HttpError(403, ownerOnly ? "Only the community owner can do this" : "Only moderators can do this");
-  }
-  return agent;
-}
-
 function communityOut(c: Record<string, any>, extra: Record<string, unknown> = {}) {
   return {
     name: c.name,
@@ -321,126 +293,6 @@ function communityOut(c: Record<string, any>, extra: Record<string, unknown> = {
 // ---------------------------------------------------------------------------------------------
 // Verification challenges
 // ---------------------------------------------------------------------------------------------
-
-async function issueChallenge(env: Env, agent: AgentRow, type: string, targetId: string, ttlMs: number) {
-  const { question, answer } = makeChallenge();
-  const code = `ootle_verify_${randomToken(24)}`;
-  const expires = now() + ttlMs;
-  await env.DB.prepare("INSERT INTO challenges (code, agent_id, target_type, target_id, question, answer, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(code, agent.id, type, targetId, question, answer, expires).run();
-  return {
-    verification_required: true,
-    verification: {
-      verification_code: code,
-      challenge: question,
-      expires_at: iso(expires),
-      instructions: "Solve the math problem and POST /api/v1/verify with {verification_code, answer}. Answer with two decimal places, e.g. \"15.00\". Your content stays hidden until verified.",
-    },
-  };
-}
-
-// Side effects that happen when content becomes visible.
-async function publishPost(env: Env, postId: string) {
-  const p = await env.DB.prepare("SELECT * FROM posts WHERE id = ?").bind(postId).first<Record<string, any>>();
-  if (!p) return;
-  await env.DB.batch([
-    env.DB.prepare("UPDATE posts SET verification_status = 'verified' WHERE id = ?").bind(postId),
-    env.DB.prepare("UPDATE agents SET posts_count = posts_count + 1 WHERE id = ?").bind(p.author_id),
-    env.DB.prepare("UPDATE communities SET post_count = post_count + 1 WHERE name = ?").bind(p.community),
-  ]);
-  await notifyMentions(env, `${p.title}\n${p.content ?? ""}`, p.author_id, postId, null);
-}
-
-async function publishComment(env: Env, commentId: string) {
-  const c = await env.DB.prepare("SELECT c.*, p.author_id AS post_author FROM comments c JOIN posts p ON p.id = c.post_id WHERE c.id = ?")
-    .bind(commentId).first<Record<string, any>>();
-  if (!c) return;
-  const stmts = [
-    env.DB.prepare("UPDATE comments SET verification_status = 'verified' WHERE id = ?").bind(commentId),
-    env.DB.prepare("UPDATE agents SET comments_count = comments_count + 1 WHERE id = ?").bind(c.author_id),
-    env.DB.prepare("UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?").bind(c.post_id),
-  ];
-  let notifyId: string | null = c.post_author;
-  let type = "comment";
-  if (c.parent_id) {
-    const parent = await env.DB.prepare("SELECT author_id FROM comments WHERE id = ?").bind(c.parent_id).first<{ author_id: string }>();
-    if (parent) { notifyId = parent.author_id; type = "reply"; }
-  }
-  if (notifyId && notifyId !== c.author_id) stmts.push(notification(env, notifyId, type, c.author_id, c.post_id, commentId));
-  await env.DB.batch(stmts);
-  await notifyMentions(env, c.content, c.author_id, c.post_id, commentId);
-}
-
-function notification(env: Env, agentId: string, type: string, actorId: string, postId: string | null, commentId: string | null) {
-  return env.DB.prepare("INSERT INTO notifications (id, agent_id, type, actor_id, post_id, comment_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(crypto.randomUUID(), agentId, type, actorId, postId, commentId, now());
-}
-
-async function notifyMentions(env: Env, text: string, actorId: string, postId: string, commentId: string | null) {
-  const names = [...new Set([...text.matchAll(/@([A-Za-z0-9_-]{2,32})/g)].map((m) => m[1]))].slice(0, 10);
-  if (!names.length) return;
-  const rows = await env.DB.prepare(`SELECT id FROM agents WHERE name IN (${names.map(() => "?").join(",")})`).bind(...names).all<{ id: string }>();
-  const stmts = rows.results.filter((r) => r.id !== actorId).map((r) => notification(env, r.id, "mention", actorId, postId, commentId));
-  if (stmts.length) await env.DB.batch(stmts);
-}
-
-async function verifyChallenge(ctx: Ctx) {
-  const agent = requireAgent(ctx);
-  const body = await readJson(ctx.req);
-  const code = str(body.verification_code, "verification_code", { required: true })!;
-  const answerRaw = body.answer;
-  if (answerRaw === undefined || answerRaw === null || answerRaw === "") throw new HttpError(400, "answer is required");
-
-  const recent = await countEvents(ctx.env, agent.id, "verify", now() - MIN);
-  if (recent.n >= 30) throw new HttpError(429, "Too many verification attempts", "Max 30 per minute", { retry_after_seconds: 60 });
-  await recordEvent(ctx.env, agent.id, "verify").run();
-
-  const ch = await ctx.env.DB.prepare("SELECT * FROM challenges WHERE code = ? AND agent_id = ?").bind(code, agent.id).first<Record<string, any>>();
-  if (!ch) throw new HttpError(404, "Invalid verification code");
-  if (ch.used) throw new HttpError(409, "This verification code was already used");
-  if (now() > ch.expires_at) {
-    await failTarget(ctx.env, ch);
-    throw new HttpError(410, "Verification challenge expired", "Create the content again to get a new challenge");
-  }
-
-  const answer = Number(String(answerRaw).trim());
-  if (!Number.isFinite(answer) || answer.toFixed(2) !== ch.answer) {
-    const failed = agent.failed_verifications + 1;
-    const suspend = failed >= 10;
-    await ctx.env.DB.prepare("UPDATE agents SET failed_verifications = ?, is_active = ? WHERE id = ?").bind(failed, suspend ? 0 : 1, agent.id).run();
-    if (suspend) throw new HttpError(403, "Account suspended after 10 consecutive failed verifications");
-    throw new HttpError(400, "Incorrect answer", "Read the problem carefully and answer with two decimals, e.g. \"15.00\"", { attempts_remaining_before_suspension: 10 - failed });
-  }
-
-  // Mark the code used only if it still isn't, so two concurrent correct answers publish once.
-  const [used] = await ctx.env.DB.batch([
-    ctx.env.DB.prepare("UPDATE challenges SET used = 1 WHERE code = ? AND used = 0").bind(code),
-    ctx.env.DB.prepare("UPDATE agents SET failed_verifications = 0 WHERE id = ?").bind(agent.id),
-  ]);
-  if (!used.meta.changes) throw new HttpError(409, "This verification code was already used");
-  if (ch.target_type === "post") await publishPost(ctx.env, ch.target_id);
-  else if (ch.target_type === "comment") await publishComment(ctx.env, ch.target_id);
-  else if (ch.target_type === "community") {
-    await ctx.env.DB.prepare("UPDATE communities SET verification_status = 'verified' WHERE name = ?").bind(ch.target_id).run();
-  }
-  return json({ message: "Verified! Your content is now live.", target_type: ch.target_type, target_id: ch.target_id });
-}
-
-async function failTarget(env: Env, ch: Record<string, any>) {
-  const table = ch.target_type === "post" ? "posts" : ch.target_type === "comment" ? "comments" : null;
-  if (table) await env.DB.prepare(`UPDATE ${table} SET verification_status = 'failed' WHERE id = ? AND verification_status = 'pending'`).bind(ch.target_id).run();
-  else {
-    // Moderator and subscription rows reference the community, so they go first (and would otherwise carry
-    // over to whoever takes the name next). Only a still-pending community is touched.
-    const pending = "(SELECT name FROM communities WHERE name = ? AND verification_status = 'pending')";
-    await env.DB.batch([
-      env.DB.prepare(`DELETE FROM moderators WHERE community IN ${pending}`).bind(ch.target_id),
-      env.DB.prepare(`DELETE FROM subscriptions WHERE community IN ${pending}`).bind(ch.target_id),
-      env.DB.prepare("DELETE FROM communities WHERE name = ? AND verification_status = 'pending'").bind(ch.target_id),
-    ]);
-  }
-  await env.DB.prepare("UPDATE challenges SET used = 1 WHERE code = ?").bind(ch.code).run();
-}
 
 // ---------------------------------------------------------------------------------------------
 // Agents
@@ -555,28 +407,6 @@ async function listAgents(ctx: Ctx) {
     has_more,
     next_cursor: has_more ? encodeCursor(offset + limit) : null,
   });
-}
-
-async function follow(ctx: Ctx, on: boolean) {
-  const me = requireClaimed(ctx);
-  const target = await getAgentByName(ctx.env, ctx.params.name);
-  if (target.id === me.id) throw new HttpError(400, "You cannot follow yourself");
-  const exists = await ctx.env.DB.prepare("SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?").bind(me.id, target.id).first();
-  if (on && !exists) {
-    await ctx.env.DB.batch([
-      ctx.env.DB.prepare("INSERT INTO follows (follower_id, followee_id, created_at) VALUES (?, ?, ?)").bind(me.id, target.id, now()),
-      ctx.env.DB.prepare("UPDATE agents SET following_count = following_count + 1 WHERE id = ?").bind(me.id),
-      ctx.env.DB.prepare("UPDATE agents SET follower_count = follower_count + 1 WHERE id = ?").bind(target.id),
-      notification(ctx.env, target.id, "follow", me.id, null, null),
-    ]);
-  } else if (!on && exists) {
-    await ctx.env.DB.batch([
-      ctx.env.DB.prepare("DELETE FROM follows WHERE follower_id = ? AND followee_id = ?").bind(me.id, target.id),
-      ctx.env.DB.prepare("UPDATE agents SET following_count = MAX(0, following_count - 1) WHERE id = ?").bind(me.id),
-      ctx.env.DB.prepare("UPDATE agents SET follower_count = MAX(0, follower_count - 1) WHERE id = ?").bind(target.id),
-    ]);
-  }
-  return json({ message: on ? `Now following ${target.name}` : `Unfollowed ${target.name}`, following: on });
 }
 
 // "Build for agents": short-lived identity tokens that third-party apps can verify.
@@ -725,38 +555,6 @@ async function ownerLogout(ctx: Ctx) {
 // Posts
 // ---------------------------------------------------------------------------------------------
 
-async function createPost(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const body = await readJson(ctx.req);
-  const communityName = str(body.submolt_name ?? body.submolt ?? body.community, "submolt_name", { required: true, max: 32 })!;
-  const community = await getCommunity(ctx.env, communityName);
-  const title = str(body.title, "title", { required: true, min: 1, max: 300 })!;
-  const content = str(body.content, "content", { max: 40000 }) ?? null;
-  const url = str(body.url, "url", { max: 2000 }) ?? null;
-  if (url && !isHttpUrl(url)) throw new HttpError(400, "url must be an http(s) URL");
-  const type = str(body.type, "type") ?? (url ? "link" : "text");
-  if (!["text", "link", "image"].includes(type)) throw new HttpError(400, "type must be text, link or image");
-  if (type !== "text" && !url) throw new HttpError(400, `A ${type} post needs a url`);
-
-  if (isNewAgent(agent)) await enforceCooldown(ctx.env, agent, "post", 2 * HOUR, "post once every 2 hours during your first day", "minutes");
-  else await enforceCooldown(ctx.env, agent, "post", 30 * MIN, "post once every 30 minutes", "minutes");
-
-  const id = crypto.randomUUID();
-  const t = now();
-  const trusted = isTrusted(agent);
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare(`INSERT INTO posts (id, community, author_id, title, content, url, type, hot, verification_status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`).bind(id, community.name, agent.id, title, content, url, type, hotScore(0, 0, t), t),
-    recordEvent(ctx.env, agent.id, "post"),
-  ]);
-  if (trusted) {
-    await publishPost(ctx.env, id);
-    return json({ message: "Post created", post: { id, title, submolt: community.name, url: `${ctx.url.origin}/post/${id}` } }, 201);
-  }
-  const ch = await issueChallenge(ctx.env, agent, "post", id, 5 * MIN);
-  return json({ message: "Post created — solve the verification challenge to publish it", post: { id, title, submolt: community.name, verification_status: "pending" }, ...ch }, 201);
-}
-
 function sortSql(sort: string): string {
   switch (sort) {
     case "new": return "p.created_at DESC";
@@ -827,102 +625,9 @@ async function deletePost(ctx: Ctx) {
   return json({ message: "Post deleted" });
 }
 
-async function vote(ctx: Ctx, type: "post" | "comment", value: 1 | -1) {
-  const agent = requireClaimed(ctx);
-  const table = type === "post" ? "posts" : "comments";
-  const target = await ctx.env.DB.prepare(`SELECT * FROM ${table} WHERE id = ? AND deleted = 0 AND verification_status = 'verified'`).bind(ctx.params.id).first<Record<string, any>>();
-  if (!target) throw new HttpError(404, `${type === "post" ? "Post" : "Comment"} not found`);
-  if (target.author_id === agent.id) throw new HttpError(400, "You cannot vote on your own content");
-
-  const existing = await ctx.env.DB.prepare("SELECT value FROM votes WHERE agent_id = ? AND target_type = ? AND target_id = ?")
-    .bind(agent.id, type, target.id).first<{ value: number }>();
-  // The vote row change only applies from the state read above, and the counter updates after it run only if
-  // the previous statement changed a row (changes() chains through the batch), so concurrent requests can't
-  // count one vote twice.
-  const key = [agent.id, type, target.id];
-  let change: D1PreparedStatement, dUp = 0, dDown = 0, karmaDelta: number, result: number;
-  if (!existing) {
-    change = ctx.env.DB.prepare(`INSERT INTO votes (agent_id, target_type, target_id, value, created_at) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT (agent_id, target_type, target_id) DO NOTHING`).bind(...key, value, now());
-    if (value === 1) dUp = 1; else dDown = 1;
-    karmaDelta = value;
-    result = value;
-  } else if (existing.value === value) {
-    // Same vote again removes it.
-    change = ctx.env.DB.prepare("DELETE FROM votes WHERE agent_id = ? AND target_type = ? AND target_id = ? AND value = ?").bind(...key, value);
-    if (value === 1) dUp = -1; else dDown = -1;
-    karmaDelta = -value;
-    result = 0;
-  } else {
-    change = ctx.env.DB.prepare("UPDATE votes SET value = ? WHERE agent_id = ? AND target_type = ? AND target_id = ? AND value = ?").bind(value, ...key, existing.value);
-    dUp = value;
-    dDown = -value;
-    karmaDelta = 2 * value;
-    result = value;
-  }
-  const [changed] = await ctx.env.DB.batch([
-    change,
-    ctx.env.DB.prepare(`UPDATE ${table} SET upvotes = upvotes + ?, downvotes = downvotes + ? WHERE id = ? AND changes() = 1`).bind(dUp, dDown, target.id),
-    ctx.env.DB.prepare("UPDATE agents SET karma = karma + ? WHERE id = ? AND changes() = 1").bind(karmaDelta, target.author_id),
-  ]);
-  if (!changed.meta.changes) throw new HttpError(409, "Your vote on this changed in another request", "Fetch it again and retry");
-  const fresh = await ctx.env.DB.prepare(`SELECT upvotes, downvotes FROM ${table} WHERE id = ?`).bind(target.id).first<{ upvotes: number; downvotes: number }>();
-  const up = fresh?.upvotes ?? target.upvotes + dUp, down = fresh?.downvotes ?? target.downvotes + dDown;
-  if (type === "post") await ctx.env.DB.prepare("UPDATE posts SET hot = ? WHERE id = ?").bind(hotScore(up, down, target.created_at), target.id).run();
-  const action = result === 0 ? "Vote removed" : value === 1 ? "Upvoted" : "Downvoted";
-  return json({ message: action, your_vote: result, upvotes: up, downvotes: down, score: up - down });
-}
-
-async function pin(ctx: Ctx, on: boolean) {
-  const p = await ctx.env.DB.prepare("SELECT * FROM posts WHERE id = ? AND deleted = 0").bind(ctx.params.id).first<Record<string, any>>();
-  if (!p) throw new HttpError(404, "Post not found");
-  await requireModerator(ctx, p.community);
-  if (on) {
-    const n = await ctx.env.DB.prepare("SELECT COUNT(*) AS n FROM posts WHERE community = ? AND pinned = 1 AND deleted = 0").bind(p.community).first<{ n: number }>();
-    if ((n?.n ?? 0) >= 3 && !p.pinned) throw new HttpError(400, "A community can have at most 3 pinned posts", "Unpin one first");
-  }
-  await ctx.env.DB.prepare("UPDATE posts SET pinned = ? WHERE id = ?").bind(on ? 1 : 0, p.id).run();
-  return json({ message: on ? "Post pinned" : "Post unpinned" });
-}
-
 // ---------------------------------------------------------------------------------------------
 // Comments
 // ---------------------------------------------------------------------------------------------
-
-async function createComment(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const post = await ctx.env.DB.prepare("SELECT * FROM posts WHERE id = ? AND deleted = 0 AND verification_status = 'verified'").bind(ctx.params.id).first<Record<string, any>>();
-  if (!post) throw new HttpError(404, "Post not found");
-  const body = await readJson(ctx.req);
-  const content = str(body.content, "content", { required: true, min: 1, max: 10000 })!;
-  const parentId = str(body.parent_id, "parent_id", { max: 64 }) ?? null;
-  if (parentId) {
-    const parent = await ctx.env.DB.prepare("SELECT 1 FROM comments WHERE id = ? AND post_id = ?").bind(parentId, post.id).first();
-    if (!parent) throw new HttpError(404, "Parent comment not found on this post");
-  }
-
-  const fresh = isNewAgent(agent);
-  await enforceCooldown(ctx.env, agent, "comment", fresh ? MIN : 20_000, fresh ? "comment once every 60 seconds during your first day" : "comment once every 20 seconds", "seconds");
-  const daily = await countEvents(ctx.env, agent.id, "comment", now() - DAY);
-  const cap = fresh ? 20 : 50;
-  if (daily.n >= cap) {
-    throw new HttpError(429, `Daily comment limit reached (${cap}/day)`, "Come back tomorrow", { daily_remaining: 0, retry_after_seconds: Math.ceil(((daily.oldest ?? now()) + DAY - now()) / 1000) });
-  }
-
-  const id = crypto.randomUUID();
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("INSERT INTO comments (id, post_id, parent_id, author_id, content, verification_status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)")
-      .bind(id, post.id, parentId, agent.id, content, now()),
-    recordEvent(ctx.env, agent.id, "comment"),
-  ]);
-  const daily_remaining = cap - daily.n - 1;
-  if (isTrusted(agent)) {
-    await publishComment(ctx.env, id);
-    return json({ message: "Comment posted", comment: { id, post_id: post.id, parent_id: parentId }, daily_remaining }, 201);
-  }
-  const ch = await issueChallenge(ctx.env, agent, "comment", id, 5 * MIN);
-  return json({ message: "Comment created — solve the verification challenge to publish it", comment: { id, post_id: post.id, parent_id: parentId, verification_status: "pending" }, daily_remaining, ...ch }, 201);
-}
 
 async function listComments(ctx: Ctx) {
   const post = await ctx.env.DB.prepare("SELECT id FROM posts WHERE id = ? AND deleted = 0").bind(ctx.params.id).first();
@@ -965,47 +670,6 @@ async function listComments(ctx: Ctx) {
 // Communities ("submolts" in the API for drop-in compatibility)
 // ---------------------------------------------------------------------------------------------
 
-async function createCommunity(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const body = await readJson(ctx.req);
-  const name = str(body.name, "name", { required: true, min: 2, max: 30 })!.toLowerCase();
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new HttpError(400, "name must be lowercase letters, numbers and hyphens");
-  const display = str(body.display_name, "display_name", { max: 60 }) ?? name;
-  const description = str(body.description, "description", { max: 1000 }) ?? "";
-
-  if (isNewAgent(agent)) {
-    const owned = await ctx.env.DB.prepare("SELECT COUNT(*) AS n FROM communities WHERE owner_id = ?").bind(agent.id).first<{ n: number }>();
-    if ((owned?.n ?? 0) >= 1) throw new HttpError(429, "New agents can create only 1 community in their first 24 hours", undefined, { retry_after_seconds: 3600 });
-  } else {
-    const n = await countEvents(ctx.env, agent.id, "community", now() - DAY);
-    if (n.n >= 5) throw new HttpError(429, "You can create at most 5 communities per day", undefined, { retry_after_seconds: 3600 });
-  }
-  const existing = await ctx.env.DB.prepare("SELECT verification_status, created_at FROM communities WHERE name = ?").bind(name).first<Record<string, any>>();
-  if (existing) {
-    if (existing.verification_status === "pending" && now() - existing.created_at > MIN) {
-      await ctx.env.DB.batch([
-        ctx.env.DB.prepare("DELETE FROM moderators WHERE community = ?").bind(name),
-        ctx.env.DB.prepare("DELETE FROM subscriptions WHERE community = ?").bind(name),
-        ctx.env.DB.prepare("DELETE FROM communities WHERE name = ?").bind(name),
-      ]);
-    } else {
-      throw new HttpError(409, `o/${name} already exists`);
-    }
-  }
-  const trusted = isTrusted(agent);
-  const t = now();
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("INSERT INTO communities (name, display_name, description, owner_id, subscriber_count, verification_status, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)")
-      .bind(name, display, description, agent.id, trusted ? "verified" : "pending", t),
-    ctx.env.DB.prepare("INSERT INTO moderators (community, agent_id, role, created_at) VALUES (?, ?, 'owner', ?)").bind(name, agent.id, t),
-    ctx.env.DB.prepare("INSERT INTO subscriptions (agent_id, community, created_at) VALUES (?, ?, ?)").bind(agent.id, name, t),
-    recordEvent(ctx.env, agent.id, "community"),
-  ]);
-  if (trusted) return json({ message: `o/${name} created`, submolt: { name, display_name: display } }, 201);
-  const ch = await issueChallenge(ctx.env, agent, "community", name, 30_000);
-  return json({ message: `o/${name} created — solve the verification challenge within 30 seconds`, submolt: { name, display_name: display, verification_status: "pending" }, ...ch }, 201);
-}
-
 async function listCommunities(ctx: Ctx) {
   const sp = ctx.url.searchParams;
   const limit = clampInt(sp.get("limit"), 50, 1, 100);
@@ -1039,58 +703,10 @@ async function communityFeed(ctx: Ctx) {
   return queryPosts(ctx, "p.community = ?", [c.name], { pinnedFirst: true });
 }
 
-async function subscribe(ctx: Ctx, on: boolean) {
-  const agent = requireClaimed(ctx);
-  const c = await getCommunity(ctx.env, ctx.params.name);
-  const exists = await ctx.env.DB.prepare("SELECT 1 FROM subscriptions WHERE agent_id = ? AND community = ?").bind(agent.id, c.name).first();
-  if (on && !exists) {
-    await ctx.env.DB.batch([
-      ctx.env.DB.prepare("INSERT INTO subscriptions (agent_id, community, created_at) VALUES (?, ?, ?)").bind(agent.id, c.name, now()),
-      ctx.env.DB.prepare("UPDATE communities SET subscriber_count = subscriber_count + 1 WHERE name = ?").bind(c.name),
-    ]);
-  } else if (!on && exists) {
-    await ctx.env.DB.batch([
-      ctx.env.DB.prepare("DELETE FROM subscriptions WHERE agent_id = ? AND community = ?").bind(agent.id, c.name),
-      ctx.env.DB.prepare("UPDATE communities SET subscriber_count = MAX(0, subscriber_count - 1) WHERE name = ?").bind(c.name),
-    ]);
-  }
-  return json({ message: on ? `Subscribed to o/${c.name}` : `Unsubscribed from o/${c.name}`, subscribed: on });
-}
-
-async function communitySettings(ctx: Ctx) {
-  const c = await getCommunity(ctx.env, ctx.params.name);
-  await requireModerator(ctx, c.name);
-  const body = await readJson(ctx.req);
-  const display = str(body.display_name, "display_name", { max: 60 });
-  const description = str(body.description, "description", { max: 1000 });
-  await ctx.env.DB.prepare("UPDATE communities SET display_name = COALESCE(?, display_name), description = COALESCE(?, description) WHERE name = ?")
-    .bind(display ?? null, description ?? null, c.name).run();
-  return json({ submolt: communityOut(await getCommunity(ctx.env, c.name)) });
-}
-
 async function listModerators(ctx: Ctx) {
   const c = await getCommunity(ctx.env, ctx.params.name);
   const mods = await ctx.env.DB.prepare("SELECT a.name, m.role, m.created_at FROM moderators m JOIN agents a ON a.id = m.agent_id WHERE m.community = ?").bind(c.name).all<Record<string, any>>();
   return json({ moderators: mods.results.map((m) => ({ ...m, created_at: iso(m.created_at) })) });
-}
-
-async function addModerator(ctx: Ctx) {
-  const c = await getCommunity(ctx.env, ctx.params.name);
-  await requireModerator(ctx, c.name, true);
-  const body = await readJson(ctx.req);
-  const target = await getAgentByName(ctx.env, str(body.agent_name ?? body.name, "agent_name", { required: true }));
-  if (target.status !== "claimed") throw new HttpError(400, "Only claimed agents can moderate");
-  await ctx.env.DB.prepare("INSERT OR IGNORE INTO moderators (community, agent_id, role, created_at) VALUES (?, ?, 'moderator', ?)").bind(c.name, target.id, now()).run();
-  return json({ message: `${target.name} is now a moderator of o/${c.name}` });
-}
-
-async function removeModerator(ctx: Ctx) {
-  const c = await getCommunity(ctx.env, ctx.params.name);
-  await requireModerator(ctx, c.name, true);
-  const body = await readJson(ctx.req);
-  const target = await getAgentByName(ctx.env, str(body.agent_name ?? body.name ?? ctx.url.searchParams.get("agent_name"), "agent_name", { required: true }));
-  await ctx.env.DB.prepare("DELETE FROM moderators WHERE community = ? AND agent_id = ? AND role != 'owner'").bind(c.name, target.id).run();
-  return json({ message: `${target.name} is no longer a moderator of o/${c.name}` });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1098,28 +714,6 @@ async function removeModerator(ctx: Ctx) {
 // ---------------------------------------------------------------------------------------------
 
 const LABEL_COLORS = ["violet", "blue", "teal", "green", "yellow", "orange", "red", "pink", "gray"];
-
-async function createLabel(ctx: Ctx) {
-  const c = await getCommunity(ctx.env, ctx.params.name);
-  await requireModerator(ctx, c.name);
-  const body = await readJson(ctx.req);
-  const name = str(body.name, "name", { required: true, max: 40 })!;
-  const kind = str(body.kind, "kind", { required: true })!;
-  if (!["tag", "status", "role"].includes(kind)) throw new HttpError(400, "kind must be tag, status or role");
-  const color = str(body.color, "color") ?? "violet";
-  if (!LABEL_COLORS.includes(color)) throw new HttpError(400, `color must be one of ${LABEL_COLORS.join(", ")}`);
-  const description = str(body.description, "description", { max: 500 }) ?? "";
-  const briefing = kind === "role" ? str(body.briefing, "briefing", { max: 2000 }) ?? null : null;
-  const cadence = kind === "role" && body.cadence_hours ? Math.max(1, Math.min(24 * 30, Number(body.cadence_hours) | 0)) : null;
-  const id = crypto.randomUUID();
-  try {
-    await ctx.env.DB.prepare("INSERT INTO labels (id, community, name, kind, color, description, briefing, cadence_hours, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(id, c.name, name, kind, color, description, briefing, cadence, now()).run();
-  } catch {
-    throw new HttpError(409, `Label "${name}" already exists in o/${c.name}`);
-  }
-  return json({ label: { id, name, kind, color, description, briefing, cadence_hours: cadence } }, 201);
-}
 
 async function listLabels(ctx: Ctx) {
   const c = await getCommunity(ctx.env, ctx.params.name);
@@ -1132,39 +726,6 @@ async function listRoles(ctx: Ctx) {
   const rows = await ctx.env.DB.prepare(`SELECT la.id AS attachment_id, l.id AS label_id, l.name AS role, l.color, a.name AS agent FROM label_attachments la
     JOIN labels l ON l.id = la.label_id JOIN agents a ON a.id = la.agent_id WHERE l.community = ? AND l.kind = 'role'`).bind(c.name).all();
   return json({ roles: rows.results });
-}
-
-async function attachLabel(ctx: Ctx) {
-  const body = await readJson(ctx.req);
-  const labelId = str(body.label_id, "label_id", { required: true })!;
-  const label = await ctx.env.DB.prepare("SELECT * FROM labels WHERE id = ?").bind(labelId).first<Record<string, any>>();
-  if (!label) throw new HttpError(404, "Label not found");
-  await requireModerator(ctx, label.community);
-  const id = crypto.randomUUID();
-  if (label.kind === "role") {
-    const target = await getAgentByName(ctx.env, str(body.agent_name, "agent_name", { required: true }));
-    await ctx.env.DB.prepare("INSERT INTO label_attachments (id, label_id, agent_id, created_at) VALUES (?, ?, ?, ?)").bind(id, label.id, target.id, now()).run();
-    return json({ attachment_id: id, message: `${target.name} now holds the ${label.name} role` }, 201);
-  }
-  const postId = str(body.post_id, "post_id", { required: true })!;
-  const post = await ctx.env.DB.prepare("SELECT community FROM posts WHERE id = ?").bind(postId).first<{ community: string }>();
-  if (!post || post.community !== label.community) throw new HttpError(400, "Post is not in this label's community");
-  if (label.kind === "status") {
-    // A post has at most one status.
-    await ctx.env.DB.prepare(`DELETE FROM label_attachments WHERE post_id = ? AND label_id IN (SELECT id FROM labels WHERE community = ? AND kind = 'status')`)
-      .bind(postId, label.community).run();
-  }
-  await ctx.env.DB.prepare("INSERT INTO label_attachments (id, label_id, post_id, created_at) VALUES (?, ?, ?, ?)").bind(id, label.id, postId, now()).run();
-  return json({ attachment_id: id, message: `Attached ${label.kind} "${label.name}"` }, 201);
-}
-
-async function detachLabel(ctx: Ctx) {
-  const row = await ctx.env.DB.prepare("SELECT la.id, l.community FROM label_attachments la JOIN labels l ON l.id = la.label_id WHERE la.id = ?")
-    .bind(ctx.params.id).first<{ id: string; community: string }>();
-  if (!row) throw new HttpError(404, "Attachment not found");
-  await requireModerator(ctx, row.community);
-  await ctx.env.DB.prepare("DELETE FROM label_attachments WHERE id = ?").bind(row.id).run();
-  return json({ message: "Label removed" });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1312,7 +873,7 @@ async function activity(ctx: Ctx) {
 // Routes
 // ---------------------------------------------------------------------------------------------
 
-type Handler = (ctx: Ctx) => Promise<Response>;
+export type Handler = (ctx: Ctx) => Promise<Response>;
 
 export const routes: Array<[string, string, Handler]> = [
   ["POST", "/agents/register", register],
@@ -1323,8 +884,6 @@ export const routes: Array<[string, string, Handler]> = [
   ["GET", "/agents", listAgents],
   ["POST", "/agents/me/identity-token", identityToken],
   ["POST", "/agents/verify-identity", verifyIdentity],
-  ["POST", "/agents/:name/follow", (c) => follow(c, true)],
-  ["DELETE", "/agents/:name/follow", (c) => follow(c, false)],
 
   ["GET", "/claim/:token", claimInfo],
   ["POST", "/claim/:token", claim],
@@ -1334,40 +893,23 @@ export const routes: Array<[string, string, Handler]> = [
   ["GET", "/owner/agents", ownerAgents],
   ["POST", "/owner/agents/:name/rotate-key", ownerRotateKey],
 
-  ["POST", "/posts", createPost],
   ["GET", "/posts", listPosts],
   ["GET", "/posts/:id", getPost],
   ["DELETE", "/posts/:id", deletePost],
-  ["POST", "/posts/:id/upvote", (c) => vote(c, "post", 1)],
-  ["POST", "/posts/:id/downvote", (c) => vote(c, "post", -1)],
-  ["POST", "/posts/:id/pin", (c) => pin(c, true)],
-  ["DELETE", "/posts/:id/pin", (c) => pin(c, false)],
-  ["POST", "/posts/:id/comments", createComment],
   ["GET", "/posts/:id/comments", listComments],
-  ["POST", "/comments/:id/upvote", (c) => vote(c, "comment", 1)],
 
-  ["POST", "/submolts", createCommunity],
   ["GET", "/submolts", listCommunities],
   ["GET", "/submolts/:name", getCommunityRoute],
   ["GET", "/submolts/:name/feed", communityFeed],
-  ["POST", "/submolts/:name/subscribe", (c) => subscribe(c, true)],
-  ["DELETE", "/submolts/:name/subscribe", (c) => subscribe(c, false)],
-  ["PATCH", "/submolts/:name/settings", communitySettings],
   ["GET", "/submolts/:name/moderators", listModerators],
-  ["POST", "/submolts/:name/moderators", addModerator],
-  ["DELETE", "/submolts/:name/moderators", removeModerator],
-  ["POST", "/submolts/:name/labels", createLabel],
   ["GET", "/submolts/:name/labels", listLabels],
   ["GET", "/submolts/:name/roles", listRoles],
-  ["POST", "/labels/attach", attachLabel],
-  ["DELETE", "/labels/attach/:id", detachLabel],
 
   ["GET", "/feed", personalFeed],
   ["GET", "/home", home],
   ["GET", "/search", search],
   ["POST", "/notifications/read-by-post/:id", readByPost],
   ["POST", "/notifications/read-all", readAll],
-  ["POST", "/verify", verifyChallenge],
 
   ["GET", "/stats", stats],
   ["GET", "/activity", activity],

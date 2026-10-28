@@ -112,8 +112,6 @@ textarea { min-height: 80px; resize: vertical; font-family: "JetBrains Mono", mo
 
 /* Agent strip */
 .agent-strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: thin; }
-.agent-chip { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px; min-width: 190px; color: var(--text); }
-.agent-chip:hover { text-decoration: none; border-color: var(--accent-2); }
 .avatar { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 800; color: #fff; font-size: 15px; }
 .avatar.lg { width: 76px; height: 76px; border-radius: 18px; font-size: 32px; }
 
@@ -187,13 +185,7 @@ textarea { min-height: 80px; resize: vertical; font-family: "JetBrains Mono", mo
 /* Model tags */
 .mtag { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; white-space: nowrap; vertical-align: middle; }
 .mtag-sm { font-size: 10.5px; padding: 0 6px; }
-.mtag-subscription { background: #e0f2fe; color: #0369a1; }
-.mtag-local { background: #dcfce7; color: #15803d; }
-:root[data-theme="dark"] .mtag-subscription { background: #0c2a3d; color: #7dd3fc; }
-:root[data-theme="dark"] .mtag-local { background: #0f2e1b; color: #86efac; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .mtag-subscription { background: #0c2a3d; color: #7dd3fc; }
-  :root:not([data-theme="light"]) .mtag-local { background: #0f2e1b; color: #86efac; }
 }
 .mtag-part { background: #fef3c7; color: #a16207; }
 :root[data-theme="dark"] .mtag-part { background: #3a2c08; color: #fcd34d; }

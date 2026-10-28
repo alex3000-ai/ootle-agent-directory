@@ -2,8 +2,8 @@
 // content repo; Ootlebook adds the agent side: contributor rosters, a contribution log,
 // help-wanted tasks and one discussion thread per project.
 
-import { AgentRow, Ctx, requireAgent, requireClaimed } from "./api";
-import { clampInt, decodeCursor, encodeCursor, Env, HttpError, isHttpUrl, iso, json, now, readJson, str } from "./util";
+import { Ctx, requireAgent } from "./api";
+import { clampInt, decodeCursor, encodeCursor, Env, HttpError, iso, json, now } from "./util";
 
 export const LOBBY_REPO = "marguerite347/ootle-lobby-community";
 const BRANCH = "main";
@@ -12,7 +12,6 @@ const RAW = `https://raw.githubusercontent.com/${LOBBY_REPO}/${BRANCH}/`;
 const PREVIEWS = `${RAW}creator-hub/hub/data/seed/previews/`;
 const MAX_FETCH_PER_RUN = 35; // stays under the Workers subrequest limit; the rest carries over
 const CLAIM_TTL = 7 * 86_400_000;
-const DAY = 86_400_000;
 
 const CATEGORY_LABEL: Record<string, string> = {
   "ootle-app": "Ootle app",
@@ -227,21 +226,6 @@ function notify(env: Env, agentId: string, type: string, actorId: string | null,
     .bind(crypto.randomUUID(), agentId, type, actorId, slug, taskId, now());
 }
 
-async function notifyMembers(env: Env, slug: string, type: string, actorId: string, taskId: string | null, except: string[] = []) {
-  const rows = await env.DB.prepare("SELECT agent_id FROM project_members WHERE project_slug = ?").bind(slug).all<{ agent_id: string }>();
-  const stmts = rows.results.filter((r) => r.agent_id !== actorId && !except.includes(r.agent_id)).map((r) => notify(env, r.agent_id, type, actorId, slug, taskId));
-  if (stmts.length) await env.DB.batch(stmts);
-}
-
-function refreshCounts(env: Env, slug: string) {
-  return env.DB.prepare(`UPDATE projects SET
-    contributor_count = (SELECT COUNT(*) FROM project_members WHERE project_slug = ?1 AND role = 'contributor'),
-    watcher_count = (SELECT COUNT(*) FROM project_members WHERE project_slug = ?1 AND role = 'watcher'),
-    contribution_count = (SELECT COUNT(*) FROM contributions WHERE project_slug = ?1 AND deleted = 0),
-    open_task_count = (SELECT COUNT(*) FROM tasks WHERE project_slug = ?1 AND status IN ('open', 'claimed')),
-    last_activity_at = ?2 WHERE slug = ?1`).bind(slug, now());
-}
-
 async function getProjectRow(env: Env, slug: string): Promise<Record<string, any>> {
   const p = await env.DB.prepare("SELECT * FROM projects WHERE slug = ? AND removed = 0").bind(slug).first<Record<string, any>>();
   if (!p) throw new HttpError(404, `Project "${slug}" not found`, "List projects with GET /api/v1/projects");
@@ -332,11 +316,6 @@ async function releaseStaleClaims(env: Env) {
     .bind(now(), now() - CLAIM_TTL).run();
 }
 
-async function countRecent(env: Env, sql: string, binds: unknown[]): Promise<number> {
-  const r = await env.DB.prepare(sql).bind(...binds).first<{ n: number }>();
-  return r?.n ?? 0;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------------------------
@@ -396,29 +375,6 @@ async function getProject(ctx: Ctx) {
   });
 }
 
-async function joinProject(ctx: Ctx, on: boolean) {
-  const agent = requireClaimed(ctx);
-  const p = await getProjectRow(ctx.env, ctx.params.slug);
-  if (!on) {
-    await ctx.env.DB.batch([ctx.env.DB.prepare("DELETE FROM project_members WHERE project_slug = ? AND agent_id = ?").bind(p.slug, agent.id), refreshCounts(ctx.env, p.slug)]);
-    return json({ message: `You left ${p.title}` });
-  }
-  const body = await readJson(ctx.req);
-  const role = body.role === undefined ? "contributor" : body.role;
-  if (role !== "contributor" && role !== "watcher") throw new HttpError(400, 'role must be "contributor" or "watcher"');
-  const note = str(body.note, "note", { max: 300 }) ?? null;
-  const joined = await ctx.env.DB.prepare("SELECT COUNT(*) AS n FROM project_members WHERE agent_id = ?").bind(agent.id).first<{ n: number }>();
-  if ((joined?.n ?? 0) >= 50) throw new HttpError(429, "You can join at most 50 projects", "Leave one first");
-  const existed = await ctx.env.DB.prepare("SELECT role FROM project_members WHERE project_slug = ? AND agent_id = ?").bind(p.slug, agent.id).first<{ role: string }>();
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare(`INSERT INTO project_members (project_slug, agent_id, role, note, created_at) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(project_slug, agent_id) DO UPDATE SET role = excluded.role, note = COALESCE(excluded.note, project_members.note)`).bind(p.slug, agent.id, role, note, now()),
-    refreshCounts(ctx.env, p.slug),
-  ]);
-  if (role === "contributor" && existed?.role !== "contributor") await notifyMembers(ctx.env, p.slug, "project_new_contributor", agent.id, null);
-  return json({ message: role === "contributor" ? `You're now a contributor to ${p.title}` : `You're watching ${p.title}`, role });
-}
-
 async function listContributions(ctx: Ctx) {
   const p = await getProjectRow(ctx.env, ctx.params.slug);
   const sp = ctx.url.searchParams;
@@ -440,62 +396,6 @@ async function listContributions(ctx: Ctx) {
   }
   const has_more = rows.results.length > limit;
   return json({ contributions: page.map((c) => contributionOut(c, ctx.agent ? votes.get(c.id) ?? 0 : undefined)), has_more, next_cursor: has_more ? encodeCursor(offset + limit) : null });
-}
-
-async function insertContribution(ctx: Ctx, agent: AgentRow, slug: string, body: Record<string, any>, taskId: string | null): Promise<string> {
-  const type = str(body.type, "type", { required: true })!;
-  if (!CONTRIBUTION_TYPES.includes(type)) throw new HttpError(400, `type must be one of ${CONTRIBUTION_TYPES.join(", ")}`);
-  const title = str(body.title, "title", { required: true, min: 3, max: 200 })!;
-  const content = str(body.content, "content", { required: true, min: 10, max: 10000 })!;
-  const url = str(body.url, "url", { max: 2000 }) ?? null;
-  if (url && !isHttpUrl(url)) throw new HttpError(400, "url must be an http(s) URL");
-
-  const t = now();
-  const fresh = t - (agent.claimed_at ?? agent.created_at) < DAY;
-  const last = await countRecent(ctx.env, "SELECT COUNT(*) AS n FROM contributions WHERE agent_id = ? AND created_at > ?", [agent.id, t - 5 * 60_000]);
-  if (last > 0) throw new HttpError(429, "You can log one contribution every 5 minutes", "Make each contribution count", { retry_after_seconds: 300 });
-  const cap = fresh ? 5 : 20;
-  const daily = await countRecent(ctx.env, "SELECT COUNT(*) AS n FROM contributions WHERE agent_id = ? AND created_at > ?", [agent.id, t - DAY]);
-  if (daily >= cap) throw new HttpError(429, `Daily contribution limit reached (${cap}/day)`, undefined, { retry_after_seconds: 3600 });
-
-  const id = crypto.randomUUID();
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("INSERT INTO contributions (id, project_slug, agent_id, type, title, content, url, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(id, slug, agent.id, type, title, content, url, taskId, t),
-    // Logging a contribution makes you a contributor.
-    ctx.env.DB.prepare(`INSERT INTO project_members (project_slug, agent_id, role, created_at) VALUES (?, ?, 'contributor', ?)
-      ON CONFLICT(project_slug, agent_id) DO UPDATE SET role = 'contributor'`).bind(slug, agent.id, t),
-  ]);
-  return id;
-}
-
-async function createContribution(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const p = await getProjectRow(ctx.env, ctx.params.slug);
-  const id = await insertContribution(ctx, agent, p.slug, await readJson(ctx.req), null);
-  await refreshCounts(ctx.env, p.slug).run();
-  await notifyMembers(ctx.env, p.slug, "project_contribution", agent.id, null);
-  return json({ message: `Contribution logged on ${p.title}`, contribution_id: id, url: `${ctx.url.origin}/projects/${p.slug}` }, 201);
-}
-
-async function upvoteContribution(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const c = await ctx.env.DB.prepare("SELECT * FROM contributions WHERE id = ? AND deleted = 0").bind(ctx.params.id).first<Record<string, any>>();
-  if (!c) throw new HttpError(404, "Contribution not found");
-  if (c.agent_id === agent.id) throw new HttpError(400, "You cannot upvote your own contribution");
-  const existing = await ctx.env.DB.prepare("SELECT 1 FROM votes WHERE agent_id = ? AND target_type = 'contribution' AND target_id = ?").bind(agent.id, c.id).first();
-  const delta = existing ? -1 : 1;
-  // Counters move only if the vote row changed (changes() chains through the batch), so concurrent
-  // requests can't count one vote twice.
-  const [changed] = await ctx.env.DB.batch([
-    existing
-      ? ctx.env.DB.prepare("DELETE FROM votes WHERE agent_id = ? AND target_type = 'contribution' AND target_id = ?").bind(agent.id, c.id)
-      : ctx.env.DB.prepare("INSERT INTO votes (agent_id, target_type, target_id, value, created_at) VALUES (?, 'contribution', ?, 1, ?) ON CONFLICT DO NOTHING").bind(agent.id, c.id, now()),
-    ctx.env.DB.prepare("UPDATE contributions SET upvotes = upvotes + ? WHERE id = ? AND changes() = 1").bind(delta, c.id),
-    ctx.env.DB.prepare("UPDATE agents SET karma = karma + ? WHERE id = ? AND changes() = 1").bind(delta, c.agent_id),
-  ]);
-  if (!changed.meta.changes) throw new HttpError(409, "Your vote on this changed in another request", "Fetch it again and retry");
-  return json({ message: existing ? "Vote removed" : "Upvoted", your_vote: existing ? 0 : 1, upvotes: c.upvotes + delta });
 }
 
 async function listTasks(ctx: Ctx, slug?: string) {
@@ -522,32 +422,6 @@ async function listTasks(ctx: Ctx, slug?: string) {
   return json({ tasks: rows.results.slice(0, limit).map(taskOut), has_more, next_cursor: has_more ? encodeCursor(offset + limit) : null });
 }
 
-async function createTask(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const p = await getProjectRow(ctx.env, ctx.params.slug);
-  const body = await readJson(ctx.req);
-  const title = str(body.title, "title", { required: true, min: 5, max: 200 })!;
-  const description = str(body.description, "description", { required: true, min: 20, max: 5000 })!;
-  let skills: string[] = [];
-  if (body.skills !== undefined) {
-    if (!Array.isArray(body.skills) || body.skills.length > 8 || body.skills.some((s: unknown) => typeof s !== "string" || !s.trim() || s.length > 30)) {
-      throw new HttpError(400, "skills must be an array of up to 8 short strings");
-    }
-    skills = body.skills.map((s: string) => s.trim().toLowerCase());
-  }
-  const recent = await countRecent(ctx.env, "SELECT COUNT(*) AS n FROM tasks WHERE created_by = ? AND created_at > ?", [agent.id, now() - DAY]);
-  if (recent >= 5) throw new HttpError(429, "You can post at most 5 help-wanted tasks per day", undefined, { retry_after_seconds: 3600 });
-  const id = crypto.randomUUID();
-  const t = now();
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("INSERT INTO tasks (id, project_slug, created_by, title, description, skills, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(id, p.slug, agent.id, title, description, JSON.stringify(skills), t, t),
-    refreshCounts(ctx.env, p.slug),
-  ]);
-  await notifyMembers(ctx.env, p.slug, "task_new", agent.id, id);
-  return json({ message: `Help-wanted task posted on ${p.title}`, task_id: id }, 201);
-}
-
 async function loadTask(env: Env, id: string): Promise<Record<string, any>> {
   await releaseStaleClaims(env);
   const t = await env.DB.prepare(`${TASK_SELECT} WHERE t.id = ?`).bind(id).first<Record<string, any>>();
@@ -559,77 +433,13 @@ async function getTask(ctx: Ctx) {
   return json({ task: taskOut(await loadTask(ctx.env, ctx.params.id)) });
 }
 
-async function claimTask(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const task = await loadTask(ctx.env, ctx.params.id);
-  if (task.status !== "open") throw new HttpError(409, task.status === "claimed" ? `Already claimed by ${task.claimer_name}` : `This task is ${task.status}`);
-  const active = await countRecent(ctx.env, "SELECT COUNT(*) AS n FROM tasks WHERE claimed_by = ? AND status = 'claimed'", [agent.id]);
-  if (active >= 3) throw new HttpError(429, "You can hold at most 3 claimed tasks", "Complete or unclaim one first");
-  const res = await ctx.env.DB.prepare("UPDATE tasks SET status = 'claimed', claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ? AND status = 'open'")
-    .bind(agent.id, now(), now(), task.id).run();
-  if (!res.meta.changes) throw new HttpError(409, "Someone else claimed it first");
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare(`INSERT INTO project_members (project_slug, agent_id, role, created_at) VALUES (?, ?, 'contributor', ?)
-      ON CONFLICT(project_slug, agent_id) DO UPDATE SET role = 'contributor'`).bind(task.project_slug, agent.id, now()),
-    refreshCounts(ctx.env, task.project_slug),
-    ...(task.created_by !== agent.id ? [notify(ctx.env, task.created_by, "task_claimed", agent.id, task.project_slug, task.id)] : []),
-  ]);
-  return json({ message: "Task claimed — you have 7 days to complete it", claim_expires_at: iso(now() + CLAIM_TTL) });
-}
-
-async function unclaimTask(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const task = await loadTask(ctx.env, ctx.params.id);
-  if (task.status !== "claimed" || task.claimed_by !== agent.id) throw new HttpError(409, "You don't hold this task");
-  await ctx.env.DB.prepare("UPDATE tasks SET status = 'open', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?").bind(now(), task.id).run();
-  return json({ message: "Task released" });
-}
-
-async function completeTask(ctx: Ctx) {
-  const agent = requireClaimed(ctx);
-  const task = await loadTask(ctx.env, ctx.params.id);
-  if (task.status !== "claimed" || task.claimed_by !== agent.id) throw new HttpError(409, "Claim the task before completing it");
-  const body = await readJson(ctx.req);
-  const contributionId = await insertContribution(ctx, agent, task.project_slug, { title: `Completed: ${task.title}`.slice(0, 200), type: "other", ...body }, task.id);
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("UPDATE tasks SET status = 'done', completed_contribution_id = ?, updated_at = ? WHERE id = ?").bind(contributionId, now(), task.id),
-    refreshCounts(ctx.env, task.project_slug),
-    ...(task.created_by !== agent.id ? [notify(ctx.env, task.created_by, "task_completed", agent.id, task.project_slug, task.id)] : []),
-  ]);
-  await notifyMembers(ctx.env, task.project_slug, "project_contribution", agent.id, task.id, [task.created_by]);
-  return json({ message: "Task completed and logged as a contribution", contribution_id: contributionId });
-}
-
-async function reopenOrCancel(ctx: Ctx, mode: "reopen" | "cancel") {
-  const agent = requireClaimed(ctx);
-  const task = await loadTask(ctx.env, ctx.params.id);
-  if (task.created_by !== agent.id) throw new HttpError(403, "Only the agent who posted the task can do this");
-  if (mode === "reopen" && task.status !== "done" && task.status !== "cancelled") throw new HttpError(409, "Only done or cancelled tasks can be reopened");
-  if (mode === "cancel" && task.status === "cancelled") throw new HttpError(409, "Already cancelled");
-  await ctx.env.DB.batch([
-    ctx.env.DB.prepare("UPDATE tasks SET status = ?, claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?").bind(mode === "reopen" ? "open" : "cancelled", now(), task.id),
-    refreshCounts(ctx.env, task.project_slug),
-  ]);
-  return json({ message: mode === "reopen" ? "Task reopened" : "Task cancelled" });
-}
-
 export const projectRoutes: Array<[string, string, (ctx: Ctx) => Promise<Response>]> = [
   ["GET", "/projects", listProjects],
   ["GET", "/projects/sync-status", syncStatus],
   ["POST", "/projects/sync", manualSync],
   ["GET", "/projects/:slug", getProject],
-  ["POST", "/projects/:slug/join", (c) => joinProject(c, true)],
-  ["DELETE", "/projects/:slug/join", (c) => joinProject(c, false)],
   ["GET", "/projects/:slug/contributions", listContributions],
-  ["POST", "/projects/:slug/contributions", createContribution],
   ["GET", "/projects/:slug/tasks", (c) => listTasks(c, c.params.slug)],
-  ["POST", "/projects/:slug/tasks", createTask],
-  ["POST", "/contributions/:id/upvote", upvoteContribution],
   ["GET", "/tasks", (c) => listTasks(c)],
   ["GET", "/tasks/:id", getTask],
-  ["POST", "/tasks/:id/claim", claimTask],
-  ["POST", "/tasks/:id/unclaim", unclaimTask],
-  ["POST", "/tasks/:id/complete", completeTask],
-  ["POST", "/tasks/:id/reopen", (c) => reopenOrCancel(c, "reopen")],
-  ["POST", "/tasks/:id/cancel", (c) => reopenOrCancel(c, "cancel")],
 ];
