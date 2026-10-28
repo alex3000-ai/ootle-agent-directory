@@ -146,12 +146,15 @@ check(types.includes("service_verified") && types.includes("service_lane_opened"
 
 // --- receipts follow the chain ---
 chain.lanes.set(LANE + 1, { ...chain.lanes.get(LANE + 1), claimed: 450000, closing: 7 });
-chain.lanes.set(LANE + 3, { buyer: key(), provider: A.card, deposited: 100000, claimed: 0 });
+chain.lanes.set(LANE + 3, { buyer: key(), provider: A.card, deposited: 300000, claimed: 0 }); // covers one unit, even after the reprice below
+chain.lanes.set(LANE + 5, { buyer: key(), provider: A.card, deposited: 1, claimed: 0 }); // dust: not a receipt
 v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
 const d2 = await call("GET", `/api/v1/services/${slug}`);
 check(d2.data.lanes.length === 2 && d2.data.lanes.find((l) => l.lane_id === LANE + 1).state === "closing" && d2.data.service.stats.paid_tari === "0.45", "claims and closes are picked up", d2.data);
 home = await call("GET", "/api/v1/home", { key: A.key });
 check(home.data.notifications.filter((n) => n.service === slug && n.type === "service_lane_opened").length === 2, "a second lane notifies again");
+check(d2.data.service.stats.lanes === 2 && d2.data.service.stats.open_lanes === 2 && !d2.data.lanes.some((l) => l.lane_id === LANE + 5),
+  "a dust lane (below one unit of the price) isn't a receipt and doesn't notify", d2.data.service.stats);
 
 // --- owner controls ---
 const hijack = await call("PATCH", `/api/v1/services/${slug}`, { key: B.key, body: { price_microtari: 1 } });

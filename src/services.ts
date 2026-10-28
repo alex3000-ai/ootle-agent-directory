@@ -154,8 +154,15 @@ export async function syncServices(env: LanesEnv): Promise<LanesSyncResult> {
   }
 
   // Receipts: lanes paying a provider card that backs a verified service.
+  // A lane counts as a receipt (and notifies the provider) only if its deposit covers one unit of the provider's
+  // cheapest service: dust lanes cost a spammer almost nothing beyond fees.
   const owners = new Map<string, Record<string, any>>();
-  for (const s of services) if (s.card_name && !owners.has(s.card_name)) owners.set(s.card_name, s);
+  const minPrice = new Map<string, number>();
+  for (const s of services) {
+    if (!s.card_name) continue;
+    if (!owners.has(s.card_name)) owners.set(s.card_name, s);
+    minPrice.set(s.card_name, Math.min(minPrice.get(s.card_name) ?? Infinity, s.price_microtari));
+  }
   const known = new Set((await env.DB.prepare("SELECT lane_id FROM service_lanes WHERE ledger = ?").bind(ledger).all<{ lane_id: number }>()).results.map((r) => r.lane_id));
   let newLanes = 0;
   for (const l of chain.lanes) {
@@ -167,16 +174,19 @@ export async function syncServices(env: LanesEnv): Promise<LanesSyncResult> {
       .bind(ledger, l.lane_id, l.provider_key, l.provider, l.buyer, l.deposited, l.claimed, l.close_requested_epoch, l.closed ? 1 : 0, t, t));
     if (!known.has(l.lane_id)) {
       newLanes++;
-      if (!l.closed) stmts.push(notify(env, owner.agent_id, "service_lane_opened", owner.slug));
+      if (!l.closed && l.deposited >= minPrice.get(l.provider)!) stmts.push(notify(env, owner.agent_id, "service_lane_opened", owner.slug));
     }
   }
   if (stmts.length) await env.DB.batch(stmts);
 
-  // Totals per verified service: every lane paying its provider card on this ledger.
+  // Totals per verified service: lanes paying its provider card on this ledger that cover one unit of its price
+  // (or have paid out); paid and escrow sum every lane.
   await env.DB.prepare("UPDATE services SET lanes_count = 0, open_lanes_count = 0, paid_microtari = 0, escrow_microtari = 0 WHERE chain_status != 'verified'").run();
   await env.DB.prepare(`UPDATE services SET
-      lanes_count = (SELECT COUNT(*) FROM service_lanes l WHERE l.ledger = ?1 AND l.provider_name = services.provider_name),
-      open_lanes_count = (SELECT COUNT(*) FROM service_lanes l WHERE l.ledger = ?1 AND l.provider_name = services.provider_name AND l.closed = 0),
+      lanes_count = (SELECT COUNT(*) FROM service_lanes l WHERE l.ledger = ?1 AND l.provider_name = services.provider_name
+        AND (l.deposited_microtari >= services.price_microtari OR l.claimed_microtari > 0)),
+      open_lanes_count = (SELECT COUNT(*) FROM service_lanes l WHERE l.ledger = ?1 AND l.provider_name = services.provider_name AND l.closed = 0
+        AND l.deposited_microtari >= services.price_microtari),
       paid_microtari = COALESCE((SELECT SUM(claimed_microtari) FROM service_lanes l WHERE l.ledger = ?1 AND l.provider_name = services.provider_name), 0),
       escrow_microtari = COALESCE((SELECT SUM(deposited_microtari - claimed_microtari) FROM service_lanes l WHERE l.ledger = ?1 AND l.provider_name = services.provider_name AND l.closed = 0), 0)
     WHERE status != 'removed' AND chain_status = 'verified'`).bind(ledger).run();
@@ -372,8 +382,9 @@ async function listServices(ctx: Ctx) {
 async function getService(ctx: Ctx) {
   const s = await loadService(ctx.env, ctx.params.slug);
   const lanes = s.chain_status === "verified"
-    ? (await ctx.env.DB.prepare("SELECT * FROM service_lanes WHERE ledger = ? AND provider_name = ? ORDER BY lane_id DESC LIMIT 100")
-      .bind(deployment(ctx.env).ledger, s.provider_name).all<Record<string, any>>()).results
+    ? (await ctx.env.DB.prepare(`SELECT * FROM service_lanes WHERE ledger = ? AND provider_name = ?
+        AND (deposited_microtari >= ? OR claimed_microtari > 0) ORDER BY lane_id DESC LIMIT 100`)
+      .bind(deployment(ctx.env).ledger, s.provider_name, s.price_microtari).all<Record<string, any>>()).results
     : [];
   return json({
     service: serviceOut(s, site(ctx), true),
