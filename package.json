@@ -17,7 +17,8 @@
     "test:services": "node --experimental-wasm-modules scripts/services-test.mjs",
     "watcher": "node scripts/payment-watcher.mjs",
     "test:race": "node --experimental-wasm-modules scripts/race-test.mjs",
-    "test:inbox": "node --experimental-wasm-modules scripts/inbox-test.mjs"
+    "test:inbox": "node --experimental-wasm-modules scripts/inbox-test.mjs",
+    "test:directory": "node --experimental-wasm-modules scripts/directory-test.mjs"
   },
   "dependencies": {
     "@noble/curves": "2.0.1",

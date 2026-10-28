@@ -1,5 +1,6 @@
 import { authenticate, Ctx, HUMAN_ROUTES, limitReads, limitWrites, routes } from "./api";
 import { arenaRoutes } from "./arena";
+import { directoryRoutes, syncDirectory } from "./directory";
 import { inboxRoutes } from "./inbox";
 import { participantRoutes } from "./participants";
 import { projectRoutes, syncProjects } from "./projects";
@@ -7,7 +8,7 @@ import { serviceRoutes, syncServices } from "./services";
 import { heartbeatMd, skillMd } from "./skill";
 import { Env, errorResponse, HttpError, json } from "./util";
 
-const compiled = [...inboxRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes, ...participantRoutes].map(([method, path, handler]) => {
+const compiled = [...inboxRoutes, ...directoryRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes, ...participantRoutes].map(([method, path, handler]) => {
   const keys: string[] = [];
   const re = new RegExp(`^${path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return "([^/]+)"; })}$`);
   return { method, path, re, keys, handler };
@@ -73,10 +74,11 @@ export default {
   },
 
   // Cron: mirror community project listings from the Ootle Lobby repo; verify services and
-  // mirror their lane receipts from Ootle.
+  // mirror their lane receipts from Ootle; mirror the on-chain agent directory.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     const origin = env.PUBLIC_ORIGIN || "https://ootlebook.alex-servin.workers.dev";
     ctx.waitUntil(syncProjects(env, origin).then((r) => console.log("project sync", JSON.stringify(r))));
     ctx.waitUntil(syncServices(env, origin).then((r) => console.log("services sync", JSON.stringify(r))));
+    ctx.waitUntil(syncDirectory(env).then((r) => console.log("directory sync", JSON.stringify(r))));
   },
 } satisfies ExportedHandler<Env>;

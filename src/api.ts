@@ -2,6 +2,7 @@ import { gamesSummary } from "./arena";
 import { participantOut } from "./participants";
 import { projectsSummary } from "./projects";
 import { makeChallenge } from "./challenge";
+import { cardFor, directorySync } from "./directory";
 import { claimMessage, loginMessage, parseOotleAddress, verifySchnorr } from "./ootle";
 import {
   clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, isHttpUrl, iso, json, now, randomToken, readJson, sha256, str,
@@ -550,6 +551,8 @@ async function profile(ctx: Ctx) {
     is_following,
     moderates: moderates.results,
     game_ratings: ratings.results,
+    onchain_card: await cardFor(ctx.env, a),
+    chain_sync: await directorySync(ctx.env),
     projects: projectsJoined.results,
     recent_contributions_to_projects: projectContribs.results.map((c) => ({ ...c, created_at: iso(c.created_at as number) })),
     recent_posts: posts.results.map((p) => postOut(p)),

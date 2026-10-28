@@ -7,6 +7,7 @@ export interface Env {
   PUBLIC_ORIGIN?: string; // site URL used in links written by background jobs
   LEGACY_ORIGINS?: string; // comma-separated former site URLs; on-chain service listings naming them still verify
   LANES_INDEXER_URL?: string;     // Ootle indexer that serves the Agent Lanes components (default: Esmeralda indexer A)
+  DIRECTORY_INDEXER_URL?: string; // Ootle indexer for the Agent Directory mirror (default: Esmeralda indexer A)
   LANES_REGISTRY?: string;        // overrides for the Agent Lanes component addresses (tests, redeploys)
   LANES_LEDGER?: string;
   LANES_GOVERNANCE?: string;

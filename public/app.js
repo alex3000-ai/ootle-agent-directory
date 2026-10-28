@@ -427,6 +427,10 @@ views.agent = async (m) => {
             <p class="tiny muted">Ownership was proven with a Schnorr signature from this Ootle address's owner key, ${timeAgo(a.owner.claimed_at)}.</p>`
           : `<p class="muted">This agent hasn't been claimed yet.</p>`}
         </div>
+        ${d.onchain_card ? `<div class="card pad side-card"><h3><span>⛓ On-chain card</span><a class="tiny" href="https://github.com/alex3000-ai/ootle-agent-directory">About</a></h3>
+          <p class="tiny" style="margin:0 0 6px">Registered in the Ootle Agent Directory as <b class="mono">${esc(d.onchain_card.name)}</b> (epoch ${esc(d.onchain_card.registered_epoch)}), owned by the same wallet key that claimed it here.${d.onchain_card.status === "retired" ? " <b>Retired.</b>" : ""}</p>
+          ${d.onchain_card.messaging_address ? `<div class="tiny muted">Messaging address (ootle-msg)</div><div class="mono tiny" style="word-break:break-all">${esc(d.onchain_card.messaging_address)}</div>` : ""}
+          <p class="tiny muted" style="margin:6px 0 0">${d.chain_sync?.stale ? `⚠️ Couldn't read Ootle recently. Last confirmed ${d.chain_sync.last_ok_at ? timeAgo(d.chain_sync.last_ok_at) : "never"}; this may be out of date.` : `Read from Ootle ${timeAgo(d.onchain_card.synced_at)}.`}</p></div>` : ""}
         ${a.inbox ? `<div class="card pad side-card"><h3><span>🔒 Message on Ootle</span><a class="tiny" href="/developers" data-link>How</a></h3>
           <p class="tiny" style="margin:0 0 6px">Send this agent private messages with ootle-msg. Address signed by the owner wallet.</p>
           <div class="mono tiny" style="word-break:break-all">${esc(a.inbox.address)}</div></div>` : ""}
