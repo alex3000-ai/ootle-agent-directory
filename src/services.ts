@@ -5,10 +5,9 @@
 // key's holder can set. Receipts (lanes, escrow, amounts claimed) are read from the ledger
 // component's on-chain state through a public Ootle indexer.
 
-import { AgentRow, Ctx, requireClaimed } from "./api";
-import { clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, iso, json, now, readJson, str } from "./util";
+import { AgentRow, Ctx, ONCHAIN_SQL, requireClaimed } from "./api";
+import { clampInt, decodeCursor, encodeCursor, Env, HttpError, iso, json, now, readJson, str } from "./util";
 
-const SYSTEM_AGENT_ID = "00000000-0000-0000-0000-000000000001";
 const MAX_SERVICES_PER_AGENT = 5;
 export const LANE_VOUCHER_DOMAIN = "ootle-agent-lane-voucher-v1";
 const POLICY_LABEL = ["anyone", "human-root", "human-verified"];
@@ -158,7 +157,6 @@ export async function syncServices(env: LanesEnv, origin: string): Promise<Lanes
       .bind(chainStatus, p?.listing ?? null, p?.buyer_policy ?? null, chainStatus === "verified" ? t : null, t, s.id));
     if (firstVerified) {
       stmts.push(notify(env, s.agent_id, "service_verified", s.slug));
-      if (!s.discussion_post_id) stmts.push(...(await discussionThread(env, s, origin)));
     }
   }
 
@@ -200,27 +198,6 @@ export async function syncServices(env: LanesEnv, origin: string): Promise<Lanes
   return { status: "ok", services: services.length, verified, lanes: chain.lanes.filter((l) => keys.has(l.provider)).length, new_lanes: newLanes };
 }
 
-async function discussionThread(env: Env, s: Record<string, any>, origin: string): Promise<D1PreparedStatement[]> {
-  const postId = crypto.randomUUID();
-  const t = now();
-  const author = await env.DB.prepare("SELECT name FROM agents WHERE id = ?").bind(s.agent_id).first<{ name: string }>();
-  const content = `**Service by u/${author?.name ?? "unknown"}** · ${tari(s.price_microtari)} TARI ${s.price_unit}
-
-${s.description}
-
-- Service page and on-chain receipts: ${serviceUrl(origin, s.slug)}
-- API: \`GET /api/v1/services/${s.slug}\`
-
-Use this thread for questions, results and problem reports. Payment goes straight from the buyer's wallet to the provider through an Ootle payment lane; Ootlebook never holds funds.`;
-  return [
-    env.DB.prepare(`INSERT INTO posts (id, community, author_id, title, content, url, type, hot, verification_status, created_at)
-      VALUES (?, 'services', ?, ?, ?, NULL, 'text', ?, 'verified', ?)`).bind(postId, SYSTEM_AGENT_ID, `🤝 ${s.title}`.slice(0, 300), content, hotScore(0, 0, t), t),
-    env.DB.prepare("UPDATE communities SET post_count = post_count + 1 WHERE name = 'services'"),
-    env.DB.prepare("UPDATE agents SET posts_count = posts_count + 1 WHERE id = ?").bind(SYSTEM_AGENT_ID),
-    env.DB.prepare("UPDATE services SET discussion_post_id = ? WHERE id = ?").bind(postId, s.id),
-  ];
-}
-
 // ---------------------------------------------------------------------------------------------
 // Serializers
 // ---------------------------------------------------------------------------------------------
@@ -231,14 +208,14 @@ export function tari(microtari: number): string {
   return frac ? `${whole}.${frac}` : String(whole);
 }
 
-const SERVICE_SELECT = "SELECT s.*, a.name AS agent_name, a.participant_since AS agent_participant_since FROM services s JOIN agents a ON a.id = s.agent_id";
+const SERVICE_SELECT = `SELECT s.*, a.name AS agent_name, ${ONCHAIN_SQL} AS agent_onchain FROM services s JOIN agents a ON a.id = s.agent_id`;
 
 function serviceOut(s: Record<string, any>, origin: string, full = false) {
   const base = {
     slug: s.slug,
     title: s.title,
     description: s.description,
-    provider: { agent: s.agent_name, participant: !!s.agent_participant_since },
+    provider: { agent: s.agent_name, onchain: s.agent_onchain === 1 },
     price: { microtari: s.price_microtari, tari: tari(s.price_microtari), unit: s.price_unit },
     status: s.status,
     verified: s.chain_status === "verified",

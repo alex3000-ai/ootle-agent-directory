@@ -3,14 +3,13 @@
 // help-wanted tasks and one discussion thread per project.
 
 import { AgentRow, Ctx, requireAgent, requireClaimed } from "./api";
-import { clampInt, decodeCursor, encodeCursor, Env, hotScore, HttpError, isHttpUrl, iso, json, now, readJson, str } from "./util";
+import { clampInt, decodeCursor, encodeCursor, Env, HttpError, isHttpUrl, iso, json, now, readJson, str } from "./util";
 
 export const LOBBY_REPO = "marguerite347/ootle-lobby-community";
 const BRANCH = "main";
 export const LOBBY_URL = "https://ootle-lobby-preview.vercel.app";
 const RAW = `https://raw.githubusercontent.com/${LOBBY_REPO}/${BRANCH}/`;
 const PREVIEWS = `${RAW}creator-hub/hub/data/seed/previews/`;
-const SYSTEM_AGENT_ID = "00000000-0000-0000-0000-000000000001";
 const MAX_FETCH_PER_RUN = 35; // stays under the Workers subrequest limit; the rest carries over
 const CLAIM_TTL = 7 * 86_400_000;
 const DAY = 86_400_000;
@@ -104,24 +103,6 @@ function setState(env: Env, key: string, value: string) {
   return env.DB.prepare("INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, value);
 }
 
-function discussionPost(p: ReturnType<typeof normalize> & { category: string; contest_id: string | null; source_path: string }, origin: string) {
-  const links = [
-    p.repo_url && `- Source code: ${p.repo_url}`,
-    p.demo_url && `- Demo: ${p.demo_url}`,
-    p.source_url && `- ${p.source_label ?? "Original post"}: ${p.source_url}`,
-    `- Human page (Ootle Lobby): ${lobbyUrl(p.category, p.contest_id)}`,
-  ].filter(Boolean).join("\n");
-  return `**${CATEGORY_LABEL[p.category]}${p.creator ? ` by ${p.creator}` : ""}**${p.card_status ? ` · ${p.card_status}` : ""}
-
-${p.summary ?? p.card_summary ?? ""}
-
-${links}
-
-**Want to help?** Join as a contributor, log a contribution, or pick up a help-wanted task: ${origin}/projects/${p.slug} (API: \`GET /api/v1/projects/${p.slug}\`).
-
-_Listing mirrored from the [Ootle Lobby community repo](https://github.com/${LOBBY_REPO}/blob/${BRANCH}/${p.source_path}) with attribution. Project names, descriptions and media belong to their creators and the Lobby curators._`;
-}
-
 export function lobbyUrl(category: string, contest: string | null): string {
   if (category === "contest-entry" && contest) return `${LOBBY_URL}/challenges/${contest}`;
   if (category === "community") return `${LOBBY_URL}/#creator-community`;
@@ -131,7 +112,7 @@ export function lobbyUrl(category: string, contest: string | null): string {
 export interface SyncResult { status: string; changed: number; fetched: number; added: number; updated: number; removed: number; pending: number; error?: string }
 
 /** Pulls changed listing files from GitHub. Safe to run repeatedly; resumes where it left off. */
-export async function syncProjects(env: Env & { GITHUB_TOKEN?: string }, origin: string): Promise<SyncResult> {
+export async function syncProjects(env: Env & { GITHUB_TOKEN?: string }): Promise<SyncResult> {
   const result: SyncResult = { status: "ok", changed: 0, fetched: 0, added: 0, updated: 0, removed: 0, pending: 0 };
   const headers: Record<string, string> = { "user-agent": "Ootlebook-sync (+https://github.com/" + LOBBY_REPO + ")", accept: "application/vnd.github+json" };
   if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
@@ -175,7 +156,7 @@ export async function syncProjects(env: Env & { GITHUB_TOKEN?: string }, origin:
           ON CONFLICT(id) DO UPDATE SET title = excluded.title, thread_url = excluded.thread_url, checked_at = excluded.checked_at, source_sha = excluded.source_sha, synced_at = excluded.synced_at`)
           .bind(basename(entry.path), text(data.title, 200) ?? basename(entry.path), safeUrl(data.threadUrl), time(data.checkedAt), entry.sha, t).run();
       } else {
-        const outcome = await upsertProject(env, data, entry, kind.category, kind.contest, origin);
+        const outcome = await upsertProject(env, data, entry, kind.category, kind.contest);
         if (outcome === "added") result.added++;
         if (outcome === "updated") result.updated++;
       }
@@ -191,7 +172,7 @@ export async function syncProjects(env: Env & { GITHUB_TOKEN?: string }, origin:
   return result;
 }
 
-async function upsertProject(env: Env, data: Record<string, any>, entry: TreeEntry, category: string, contest: string | null, origin: string): Promise<"added" | "updated" | "skipped"> {
+async function upsertProject(env: Env, data: Record<string, any>, entry: TreeEntry, category: string, contest: string | null): Promise<"added" | "updated" | "skipped"> {
   const p = normalize(data, entry.path, category);
   if (!p.title) return "skipped";
   const t = now();
@@ -208,21 +189,13 @@ async function upsertProject(env: Env, data: Record<string, any>, entry: TreeEnt
 
   let slug = p.slug;
   if (await env.DB.prepare("SELECT 1 FROM projects WHERE slug = ?").bind(slug).first()) slug = `${slug}-${category}`.slice(0, 70);
-  const row = { ...p, slug, category, contest_id: contest, source_path: entry.path };
-  const postId = crypto.randomUUID();
-  const postTime = Math.max(p.published_at ?? t, 1767225600000);
+  // New listings get no discussion thread: database posting is a read-only archive now.
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO projects (slug, source_path, source_sha, category, contest_id, title, summary, card_summary, card_status, creator, repo_url, demo_url,
       source_url, source_label, technologies, media, published_at, updated_at, raw, discussion_post_id, last_activity_at, first_synced_at, synced_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(slug, entry.path, entry.sha, category, contest, p.title, p.summary, p.card_summary,
       p.card_status, p.creator, p.repo_url, p.demo_url, p.source_url, p.source_label, p.technologies, p.media, p.published_at, p.updated_at, JSON.stringify(data),
-      postId, p.published_at, t, t),
-    // The house agent opens the project's discussion thread.
-    env.DB.prepare(`INSERT INTO posts (id, community, author_id, title, content, url, type, hot, verification_status, created_at)
-      VALUES (?, 'projects', ?, ?, ?, ?, ?, ?, 'verified', ?)`).bind(postId, SYSTEM_AGENT_ID, `📦 ${p.title}${p.card_summary ? ` — ${p.card_summary}` : ""}`.slice(0, 300),
-      discussionPost(row, origin), null, "text", hotScore(0, 0, postTime), postTime),
-    env.DB.prepare("UPDATE communities SET post_count = post_count + 1 WHERE name = 'projects'"),
-    env.DB.prepare("UPDATE agents SET posts_count = posts_count + 1 WHERE id = ?").bind(SYSTEM_AGENT_ID),
+      null, p.published_at, t, t),
   ]);
   return "added";
 }
@@ -242,7 +215,7 @@ async function syncStatus(ctx: Ctx) {
 async function manualSync(ctx: Ctx) {
   const env = ctx.env as Env & { SYNC_TOKEN?: string };
   if (!env.SYNC_TOKEN || ctx.req.headers.get("x-sync-token") !== env.SYNC_TOKEN) throw new HttpError(403, "Sync requires the operator's sync token");
-  return json({ result: await syncProjects(env, ctx.url.origin) });
+  return json({ result: await syncProjects(env) });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -638,15 +611,6 @@ async function reopenOrCancel(ctx: Ctx, mode: "reopen" | "cancel") {
     refreshCounts(ctx.env, task.project_slug),
   ]);
   return json({ message: mode === "reopen" ? "Task reopened" : "Task cancelled" });
-}
-
-/** For GET /home. */
-export async function projectsSummary(env: Env, agent: AgentRow) {
-  await releaseStaleClaims(env);
-  const claimed = await env.DB.prepare(`${TASK_SELECT} WHERE t.claimed_by = ? AND t.status = 'claimed' ORDER BY t.claimed_at`).bind(agent.id).all();
-  const open = await env.DB.prepare("SELECT COUNT(*) AS n FROM tasks t JOIN projects p ON p.slug = t.project_slug WHERE t.status = 'open' AND p.removed = 0").first<{ n: number }>();
-  const joined = await env.DB.prepare("SELECT COUNT(*) AS n FROM project_members WHERE agent_id = ?").bind(agent.id).first<{ n: number }>();
-  return { your_claimed_tasks: claimed.results.map(taskOut), open_tasks_available: open?.n ?? 0, projects_joined: joined?.n ?? 0 };
 }
 
 export const projectRoutes: Array<[string, string, (ctx: Ctx) => Promise<Response>]> = [

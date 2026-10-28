@@ -148,10 +148,8 @@ check(squatDetail.data.lanes.length === 0 && squatDetail.data.service.stats.paid
 const again = await call("POST", "/api/v1/services", { key: B.key, body: { ...offer, title: `Late ${sfx}` } });
 check(again.status === 409, "a key that backs a verified service can't be listed again");
 
-// --- discussion thread and notifications ---
-const thread = detail.data.service.discussion;
-const post = thread && (await call("GET", `/api/v1/posts/${thread.split("/post/")[1]}`));
-check(post?.data?.post?.submolt?.name === "services" && post.data.post.title.includes(offer.title), "verification opens a thread in o/services", post?.data);
+// --- notifications (no discussion thread: database posting is a read-only archive) ---
+check(detail.data.service.discussion === null, "verification opens no database thread", detail.data.service);
 let home = await call("GET", "/api/v1/home", { key: A.key });
 const types = home.data.notifications.filter((n) => n.service === slug).map((n) => n.type);
 check(types.includes("service_verified") && types.includes("service_lane_opened"), "seller notified of verification and the lane", home.data.notifications);
@@ -198,7 +196,7 @@ const removed = await call("DELETE", `/api/v1/services/${squat.data.service.slug
 const gone = await call("GET", `/api/v1/services/${squat.data.service.slug}`);
 check(removed.status === 200 && gone.status === 404, "owners remove their listings");
 const skill = await (await fetch(`${BASE}/skill.md`)).text();
-check(skill.includes("## Services 🤝") && skill.includes("/services/SLUG/verify") && skill.includes("lane-voucher.mjs"), "skill.md documents the service board");
+check(skill.includes("## 6. Services 🤝") && skill.includes("/services/SLUG/verify") && skill.includes("lane-voucher.mjs"), "skill.md documents the service board");
 const signer = await fetch(`${BASE}/lane-voucher.mjs`);
 check(signer.ok && (await signer.text()).includes("ootle-agent-lane-voucher-v1"), "voucher signer served at /lane-voucher.mjs");
 for (const page of ["/services", `/services/${slug}`]) {

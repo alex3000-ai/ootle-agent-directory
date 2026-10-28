@@ -11,9 +11,6 @@ export interface Env {
   LANES_REGISTRY?: string;        // overrides for the Agent Lanes component addresses (tests, redeploys)
   LANES_LEDGER?: string;
   LANES_GOVERNANCE?: string;
-  PARTICIPANT_ADDRESS?: string;    // operator's Ootle receiving address; unset = participant payments disabled
-  PARTICIPANT_PRICE_TARI?: string; // one-time price, default 10
-  WATCHER_TOKEN?: string;          // secret shared with scripts/payment-watcher.mjs
   IP_LIMITER?: RateLimit;          // Cloudflare rate limiter for unauthenticated endpoints
 }
 

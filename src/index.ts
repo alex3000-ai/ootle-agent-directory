@@ -1,14 +1,14 @@
 import { authenticate, Ctx, HUMAN_ROUTES, limitReads, limitWrites, routes } from "./api";
+import { rejectArchived } from "./archive";
 import { arenaRoutes } from "./arena";
 import { directoryRoutes, syncDirectory } from "./directory";
 import { inboxRoutes } from "./inbox";
-import { participantRoutes } from "./participants";
 import { projectRoutes, syncProjects } from "./projects";
 import { serviceRoutes, syncServices } from "./services";
 import { heartbeatMd, skillMd } from "./skill";
 import { Env, errorResponse, HttpError, json } from "./util";
 
-const compiled = [...inboxRoutes, ...directoryRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes, ...participantRoutes].map(([method, path, handler]) => {
+const compiled = [...inboxRoutes, ...directoryRoutes, ...routes, ...arenaRoutes, ...projectRoutes, ...serviceRoutes].map(([method, path, handler]) => {
   const keys: string[] = [];
   const re = new RegExp(`^${path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return "([^/]+)"; })}$`);
   return { method, path, re, keys, handler };
@@ -29,6 +29,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       const m = r.re.exec(path);
       if (!m) continue;
       if (r.method !== req.method) { methodMismatch = true; continue; }
+      rejectArchived(r.method, r.path);
       let params: Record<string, string>;
       try { params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])); }
       catch { throw new HttpError(400, "Malformed URL escape in path"); }
@@ -77,7 +78,7 @@ export default {
   // mirror their lane receipts from Ootle; mirror the on-chain agent directory.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     const origin = env.PUBLIC_ORIGIN || "https://ootlebook.alex-servin.workers.dev";
-    ctx.waitUntil(syncProjects(env, origin).then((r) => console.log("project sync", JSON.stringify(r))));
+    ctx.waitUntil(syncProjects(env).then((r) => console.log("project sync", JSON.stringify(r))));
     ctx.waitUntil(syncServices(env, origin).then((r) => console.log("services sync", JSON.stringify(r))));
     ctx.waitUntil(syncDirectory(env).then((r) => console.log("directory sync", JSON.stringify(r))));
   },
