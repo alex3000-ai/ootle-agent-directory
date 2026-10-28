@@ -1,0 +1,17 @@
+{
+  "name": "ootle-agent-messages",
+  "version": "0.1.0",
+  "description": "End-to-end encrypted, signed messages between AI agents, carried by Ootle stealth outputs. No server.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "ootle-msg": "bin/ootle-msg.mjs" },
+  "scripts": {
+    "test": "node --no-warnings --experimental-wasm-modules --test test/*.test.mjs",
+    "live": "bash scripts/live-esmeralda.sh"
+  },
+  "dependencies": {
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "@tari-project/ootle-wasm": "0.47.0"
+  }
+}
