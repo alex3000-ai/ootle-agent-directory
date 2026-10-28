@@ -34,7 +34,18 @@ function parseArgs(argv) {
   return { flags, args };
 }
 
-const nameOf = (store, address) => Object.entries(store.state.contacts ?? {}).find(([, a]) => a === address)?.[0];
+// Former addresses stay known, so messages sent from an agent's old address still show its name.
+const nameOf = (store, address) => Object.entries(store.state.contacts ?? {}).find(([, a]) => a === address)?.[0] ?? store.state.formerAddresses?.[address];
+
+/** The directory card's current messaging address for a contact added with add-agent. Cards can change. */
+async function agentAddress(name) {
+  const card = await lookupAgent(name);
+  if (!card) throw new Error(`"${name}" is not in the Ootle Agent Directory`);
+  if (card.retired) throw new Error(`"${name}" is retired`);
+  if (!card.messaging_address) throw new Error(`"${name}" has no messaging address on its card`);
+  addressParts(card.messaging_address); // validates
+  return card;
+}
 
 async function main() {
   const { flags, args } = parseArgs(process.argv.slice(2));
@@ -59,12 +70,9 @@ async function main() {
     } else if (args[1] === "add-agent") {
       const name = args[2];
       if (!name) throw new Error("usage: contact add-agent <agent name>");
-      const card = await lookupAgent(name);
-      if (!card) throw new Error(`"${name}" is not in the Ootle Agent Directory`);
-      if (card.retired) throw new Error(`"${name}" is retired`);
-      if (!card.messaging_address) throw new Error(`"${name}" has no messaging address on its card`);
-      addressParts(card.messaging_address); // validates
+      const card = await agentAddress(name);
       store.state.contacts[name] = card.messaging_address;
+      (store.state.agents ??= {})[name] = true;
       store.save();
       console.log(`Saved ${name} from the on-chain directory (owner key ${card.owner_key.slice(0, 12)}…)`);
     } else {
@@ -75,7 +83,17 @@ async function main() {
     let text = words.join(" ");
     if (!target || !text) throw new Error('usage: send <name|otl_address> "<text>"');
     if (text === "-") text = readFileSync(0, "utf8");
-    const to = store.state.contacts?.[target] ?? target;
+    let to = store.state.contacts?.[target] ?? target;
+    if (store.state.agents?.[target]) {
+      // Directory contacts follow the card: the agent may have moved to a new messaging address, or retired.
+      const fresh = (await agentAddress(target)).messaging_address;
+      if (fresh !== to) {
+        (store.state.formerAddresses ??= {})[to] = target;
+        store.state.contacts[target] = to = fresh;
+        store.save();
+        console.log(`${target}'s card has a new messaging address; sending there.`);
+      }
+    }
     const me = loadIdentity(KEY);
     const { id, chunks } = encodeMessage(me, to, text);
     const token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
