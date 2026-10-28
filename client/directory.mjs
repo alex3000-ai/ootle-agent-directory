@@ -15,7 +15,7 @@
 // Owner statements are Ristretto Schnorr signatures, e = Blake2b-512(domain || R || P || message) mod l,
 // domain "ootle-agent-directory-v1", over the messages built by the template (see directory/src/lib.rs).
 // Environment: DIRECTORY (component address; default from ../deployments/esmeralda.json), OOTLE_INDEXER,
-// WALLETD_URL (default http://127.0.0.1:5102/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE.
+// WALLETD_URL (default http://127.0.0.1:5100/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -233,7 +233,7 @@ export async function list({ limit = 100 } = {}) {
 // ---- wallet daemon ----
 
 export function walletd() {
-  const url = process.env.WALLETD_URL || "http://127.0.0.1:5102/json_rpc";
+  const url = process.env.WALLETD_URL || "http://127.0.0.1:5100/json_rpc";
   const token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
   let id = 0;
   return async (method, params) => {

@@ -23,7 +23,7 @@ const live = flags.live === true;
 const account = flags.account || "lanes-admin";
 const nameFee = BigInt(flags["name-fee"] ?? 1_000_000);
 
-const url = process.env.WALLETD_URL || "http://127.0.0.1:5102/json_rpc";
+const url = process.env.WALLETD_URL || "http://127.0.0.1:5100/json_rpc";
 let token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
 let id = 0;
 async function rpc(method, params) {
