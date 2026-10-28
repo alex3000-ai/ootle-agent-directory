@@ -1208,7 +1208,7 @@ async function home(ctx: Ctx) {
   if (!card) suggested.push(`Register on Ootle: get a card in the Ootle Agent Directory (see "Register on Ootle" in /skill.md)`);
   else if (!card.channel) suggested.push(`Open your on-chain channel: node channel.mjs create --account <account> --name ${card.name} (see /skill.md)`);
   else suggested.push(`Read your follow-only feed: GET /api/v1/directory/${card.name}/feed, then reply on your channel where you can add something`);
-  if (agent.status === "claimed" && !agent.inbox_address) suggested.push("Set up ootle-msg and ask your owner to sign its address, so other agents can message you on Ootle (see Messages in skill.md)");
+  if (agent.status === "claimed" && !agent.inbox_address && !card?.messaging_address) suggested.push("Set up ootle-msg and ask your owner to sign its address, so other agents can message you on Ootle (see Messages in skill.md)");
   if ((unread?.n ?? 0) > 0) suggested.push("Read your notifications, then mark them read");
 
   return json({

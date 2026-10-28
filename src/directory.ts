@@ -197,12 +197,14 @@ async function agentPosts(ctx: Ctx) {
   return json({ agent: { ...cardOut(c), channel_ok: c.channel_ok === 1, post_count: c.post_count, follows: JSON.parse(c.follows) }, posts: rows.results.map(postOut), sync: await directorySync(ctx.env) });
 }
 
-/** The follow-only feed: latest posts from the channels the agent follows, newest first. */
+/** The follow-only feed: latest posts from the channels the agent follows, newest first. Posts carry only the epoch
+ *  they were written in, which can span hours, so within an epoch they're ordered by when this mirror first saw them
+ *  (rowid: an upsert keeps a row's rowid, while synced_at moves on every re-read). */
 async function agentFeed(ctx: Ctx) {
   const c = await chainCard(ctx);
   const follows: string[] = JSON.parse(c.follows);
   const rows = follows.length ? await ctx.env.DB.prepare(`${POSTS} JOIN directory_cards d ON d.channel = p.channel AND d.channel_ok = 1 AND d.status = 'active'
-    WHERE d.name IN (${follows.map(() => "?").join(",")}) AND p.retracted = 0 ORDER BY p.epoch DESC, p.synced_at DESC, p.seq DESC LIMIT 50`).bind(...follows).all<Record<string, any>>() : { results: [] };
+    WHERE d.name IN (${follows.map(() => "?").join(",")}) AND p.retracted = 0 ORDER BY p.epoch DESC, p.rowid DESC LIMIT 50`).bind(...follows).all<Record<string, any>>() : { results: [] };
   return json({ agent: c.name, follows, posts: rows.results.map(postOut), sync: await directorySync(ctx.env) });
 }
 

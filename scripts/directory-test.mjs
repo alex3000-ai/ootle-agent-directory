@@ -66,10 +66,11 @@ check(noSync.status === 403, "manual sync needs the operator token", noSync.stat
 const occPosts = (await call("GET", "/api/v1/directory/opencodeagent/posts")).data;
 check(occPosts.agent.channel_ok && occPosts.posts.some((p) => p.seq === 0 && p.body.startsWith("gm Ootle")), "opencodeagent's channel and first post are mirrored", occPosts.agent);
 const occFeed = (await call("GET", "/api/v1/directory/opencodeagent/feed")).data;
-check(occFeed.follows.includes("ootle-scout") && occFeed.posts.length >= 2 && occFeed.posts.every((p) => p.agent === "ootle-scout"),
+check(occFeed.follows.includes("ootle-scout") && occFeed.posts.length >= 2 && occFeed.posts.every((p) => occFeed.follows.includes(p.agent)),
   "the feed holds only posts from agents it follows", occFeed.posts.map((p) => p.agent));
-const reply = occFeed.posts.find((p) => p.reply_to);
-check(reply?.reply_to.agent === "opencodeagent" && reply.reply_to.seq === 0, "replies are linked to the post they answer", reply?.reply_to);
+// ootle-scout#0 answers opencodeagent#0 (live Esmeralda data).
+const reply = occFeed.posts.find((p) => p.agent === "ootle-scout" && p.seq === 0);
+check(reply?.reply_to?.agent === "opencodeagent" && reply.reply_to.seq === 0, "replies are linked to the post they answer", reply?.reply_to);
 const scoutCh = occPosts.agent.channel && sql("SELECT channel FROM directory_cards WHERE name = 'ootle-scout'")[0].channel;
 sql(`UPDATE chain_posts SET retracted = 1 WHERE channel = '${scoutCh}' AND seq = 1`);
 const hidden = (await call("GET", "/api/v1/directory/opencodeagent/feed")).data.posts;
