@@ -5,12 +5,9 @@ export interface Env {
   GITHUB_TOKEN?: string; // optional: raises the GitHub API rate limit for project sync
   SYNC_TOKEN?: string;   // optional: enables POST /api/v1/projects/sync for the operator
   PUBLIC_ORIGIN?: string; // site URL used in links written by background jobs
-  LEGACY_ORIGINS?: string; // comma-separated former site URLs; on-chain service listings naming them still verify
   LANES_INDEXER_URL?: string;     // Ootle indexer that serves the Agent Lanes components (default: Esmeralda indexer A)
   DIRECTORY_INDEXER_URL?: string; // Ootle indexer for the Agent Directory mirror (default: Esmeralda indexer A)
-  LANES_REGISTRY?: string;        // overrides for the Agent Lanes component addresses (tests, redeploys)
-  LANES_LEDGER?: string;
-  LANES_GOVERNANCE?: string;
+  LANES_LEDGER?: string;          // override for the Agent Lanes ledger address (tests, redeploys)
   IP_LIMITER?: RateLimit;          // Cloudflare rate limiter for unauthenticated endpoints
 }
 

@@ -1,6 +1,7 @@
 // End-to-end test of the service board against local `wrangler dev`, with a simulated Ootle indexer
-// serving the Agent Lanes components in the indexer's JSON rendering of CBOR state.
-// Needs LANES_INDEXER_URL=http://127.0.0.1:5198 and LEGACY_ORIGINS=https://old.ootlebook.example in .dev.vars.
+// serving the Agent Lanes v0.2 ledger in the indexer's JSON rendering of CBOR state. Directory cards are
+// seeded straight into the local database, as the directory sync would write them.
+// Needs LANES_INDEXER_URL=http://127.0.0.1:5198 in .dev.vars.
 //   BASE=http://localhost:8787 node --experimental-wasm-modules scripts/services-test.mjs
 
 import { execFileSync } from "node:child_process";
@@ -9,9 +10,8 @@ import { randomBytes } from "node:crypto";
 import { generateKeypair, generateOotleAddress, schnorrSign } from "@tari-project/ootle-wasm";
 
 const BASE = process.env.BASE || "http://localhost:8787";
-const GOVERNANCE = "component_e58f4160c3afd91902765e3f9cf1dd5877f4fb62c408e8f2e54da7f1cdf4a6bd";
-const REGISTRY = "component_3affb3db07852d4c7a507e130b08204fc63500f29a52cf4fd073fdedb1f8af13";
-const LEDGER = "component_ed14de2474cf07f45fdc8bbc05f1fbe6931580634e013650856ccf0d3d3483e2";
+const DIRECTORY = "component_281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61";
+const LEDGER = "component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac";
 const hex = (b) => Buffer.from(b).toString("hex");
 const key = () => randomBytes(32).toString("hex");
 // Lane ids are unique per run: the local database keeps lanes from earlier runs, and only lanes it
@@ -52,101 +52,91 @@ async function newAgent(name, { claim = true } = {}) {
       body: { address: generateOotleAddress(owner.public_key, view.public_key, 0x26), public_nonce: hex(public_nonce), signature: hex(signature) },
     });
   }
-  return { name, key: reg.data.agent.api_key };
+  const row = sql(`SELECT owner_pubkey FROM agents WHERE name = '${name}'`)[0];
+  return { name, key: reg.data.agent.api_key, card: name.toLowerCase(), owner: row?.owner_pubkey ?? null };
 }
 
-// --- simulated indexer: mutable chain state, rendered the way the indexer renders CBOR ---
+/** Writes a directory card the way the directory sync mirrors one from the chain. */
+function card(name, ownerKey, status = "active") {
+  sql(`INSERT INTO directory_cards (name, agent_key, owner_key, messaging_address, description, channel, status, registered_epoch, updated_epoch, register_tx, synced_at)
+    VALUES ('${name}', '${key()}', '${ownerKey}', '', 'service tester', NULL, '${status}', 1, 1, NULL, ${Date.now()})
+    ON CONFLICT(name) DO UPDATE SET owner_key = excluded.owner_key, status = excluded.status`);
+}
+
+// --- simulated indexer: mutable ledger state, rendered the way the indexer renders CBOR ---
 const bytes = (h) => ({ "@cbor": "bytes", hex: h });
-const chain = { providers: new Map(), lanes: new Map(), fee_bps: 0, failing: false };
-const states = () => ({
-  [GOVERNANCE]: [{ "@cbor": "tag", tag: 131, value: bytes("e5".repeat(32)) }, 1, bytes("11".repeat(32)), chain.fee_bps, 6, false],
-  [REGISTRY]: [
-    { "@cbor": "map", entries: [...chain.providers].map(([k, p]) => [bytes(k), [p.epoch ?? 100, p.banned ?? false, p.listing, p.policy ?? 0]]) },
-    {}, [],
-  ],
-  [LEDGER]: [
-    { "@cbor": "tag", tag: 128, value: bytes(GOVERNANCE.slice(10)) }, { "@cbor": "tag", tag: 128, value: bytes(REGISTRY.slice(10)) },
-    { "@cbor": "tag", tag: 132, value: bytes("ed".repeat(32)) }, { "@cbor": "map", entries: [] },
-    { "@cbor": "map", entries: [...chain.lanes].map(([id, l]) => [id, [bytes(l.buyer), bytes(l.provider), l.deposited, l.claimed, l.closing ?? null, l.closed ?? false, bytes(l.voucher ?? "9c".repeat(32))]]) },
-    chain.lanes.size + 1, 0,
-  ],
-});
+const tag = (t, h) => ({ "@cbor": "tag", tag: t, value: bytes(h) });
+const chain = { directory: DIRECTORY, listings: {}, lanes: new Map(), failing: false };
+const ledgerState = () => [
+  tag(128, chain.directory.slice(10)), 6, tag(132, "ed".repeat(32)), {},
+  chain.lanes.size
+    ? { "@cbor": "map", entries: [...chain.lanes].map(([id, l]) => [id, [bytes(l.buyer), l.provider, bytes(l.provider_key ?? "aa".repeat(32)), l.deposited, l.claimed, l.closing ?? null, l.closed ?? false, bytes("9c".repeat(32))]]) }
+    : {},
+  chain.lanes.size + 1,
+  { ...chain.listings },
+];
 const indexer = createServer((req, res) => {
   const id = decodeURIComponent((req.url ?? "").replace(/^\/substates\//, ""));
-  const state = states()[id];
   if (chain.failing) { res.writeHead(503); res.end("unavailable"); return; }
-  if (!state) { res.writeHead(404, { "content-type": "application/json" }); res.end("{}"); return; }
+  if (id !== LEDGER) { res.writeHead(404, { "content-type": "application/json" }); res.end("{}"); return; }
   res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ version: 1, state: { up: { substate: { Component: { header: {}, body: { state } } } } }, verified: false }));
+  res.end(JSON.stringify({ version: 1, state: { up: { substate: { Component: { header: {}, body: { state: ledgerState() } } } } }, verified: false }));
 }).listen(5198, "127.0.0.1");
 
 sql("DELETE FROM rate_events");
 const sfx = Date.now().toString(36).slice(-5);
 const [A, B, U] = await Promise.all([newAgent(`Seller_${sfx}`), newAgent(`Squat_${sfx}`), newAgent(`Nobody_${sfx}`, { claim: false })]);
-const providerKey = key();
 const offer = {
   title: `Summaries ${sfx}`,
   description: "Five-bullet summaries of public GitHub issue threads.",
-  how_to_order: "Reply in the service thread with the URL, your lane id and a voucher.",
+  how_to_order: "Message me with ootle-msg: the URL, your lane id and a voucher.",
   price_microtari: 200000,
   price_unit: "per thread",
-  provider_key: providerKey,
 };
 
 // --- listing ---
 const unclaimed = await call("POST", "/api/v1/services", { key: U.key, body: offer });
 check(unclaimed.status === 403, "unclaimed agents can't list services");
-for (const [field, value] of [["provider_key", "abc"], ["price_microtari", 0], ["price_microtari", 1.5], ["endpoint_url", "http://insecure.example"], ["title", ""]]) {
+for (const [field, value] of [["price_microtari", 0], ["price_microtari", 1.5], ["endpoint_url", "http://insecure.example"], ["title", ""]]) {
   const bad = await call("POST", "/api/v1/services", { key: A.key, body: { ...offer, [field]: value } });
   check(bad.status === 400, `invalid ${field} (${JSON.stringify(value)}) rejected`, bad.data);
 }
 const created = await call("POST", "/api/v1/services", { key: A.key, body: offer });
 const slug = created.data?.service?.slug;
-check(created.status === 201 && created.data.service.verified === false && created.data.service.chain_status === "unchecked", "service listed as unverified", created.data);
-const listing = created.data.verify?.listing_to_set;
-check(listing?.endsWith(`/services/${slug}`) && created.data.verify.steps.length === 2, "response says what to set on-chain", created.data.verify);
+check(created.status === 201 && created.data.service.verified === false && created.data.service.chain_status === "no_card", "without a directory card: listed as unverified", created.data);
+check(created.data.verify?.length === 3 && created.data.verify[0].includes("Ootle Agent Directory"), "response says how to get verified", created.data.verify);
 
 let board = await call("GET", "/api/v1/services?limit=100");
 check(!board.data.services.some((s) => s.slug === slug), "unverified services stay off the default board");
 board = await call("GET", "/api/v1/services?limit=100&include_unverified=true");
 check(board.data.services.some((s) => s.slug === slug), "include_unverified shows them");
 
-// Someone else lists the same key before it's verified.
+// B lists too. B's name gets a card, but owned by someone else's key: that must not verify B.
 const squat = await call("POST", "/api/v1/services", { key: B.key, body: { ...offer, title: `Squatted ${sfx}` } });
-check(squat.status === 201, "an unverified listing of the same key is allowed");
+check(squat.status === 201, "a second agent lists a service");
+card(B.card, key());
 
-// --- verification against the chain ---
+// --- verification against directory cards ---
+card(A.card, A.owner);
+chain.listings[A.card] = `https://elsewhere.example/${slug}`;
+chain.lanes.set(LANE + 1, { buyer: key(), provider: A.card, provider_key: "ab".repeat(32), deposited: 500000, claimed: 200000 });
+chain.lanes.set(LANE + 2, { buyer: key(), provider: `other-${sfx}`, deposited: 900000, claimed: 900000 }); // someone else's lane
+chain.lanes.set(LANE + 4, { buyer: key(), provider: B.card, deposited: 300000, claimed: 100000 }); // lanes to B's card name
 let v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
-check(v.status === 200 && v.data.service.chain_status === "not_registered" && v.data.verify, "unregistered key: not_registered, with steps", v.data);
-chain.providers.set(providerKey, { listing: "https://elsewhere.example/thing" });
-v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
-check(v.data.service.chain_status === "listing_mismatch" && v.data.message.includes("elsewhere.example"), "wrong on-chain listing: listing_mismatch", v.data);
-// .dev.vars sets LEGACY_ORIGINS=https://old.ootlebook.example: a listing naming a former domain still verifies.
-chain.providers.set(providerKey, { listing: `https://old.ootlebook.example/services/${slug}` });
-v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
-check(v.data.service.chain_status === "verified", "listing on a former domain (LEGACY_ORIGINS) still verifies", v.data);
-chain.providers.set(providerKey, { listing: `https://other.example/services/${slug}` });
-v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
-check(v.data.service.chain_status === "listing_mismatch", "same path on an unlisted domain does not verify", v.data);
-chain.providers.set(providerKey, { listing, policy: 1 });
-chain.lanes.set(LANE + 1, { buyer: key(), provider: providerKey, deposited: 500000, claimed: 200000 });
-chain.lanes.set(LANE + 2, { buyer: key(), provider: key(), deposited: 900000, claimed: 900000 }); // someone else's lane
-v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
-check(v.data.service.verified === true && v.data.service.buyer_policy === "human-root" && !v.data.verify, "matching listing: verified, buyer policy read from chain", v.data);
+check(v.status === 200 && v.data.service.verified === true && v.data.service.provider.card === A.card && !v.data.verify, "matching card: verified, provider card named", v.data);
+check(v.data.service.chain.listing_on_chain === `https://elsewhere.example/${slug}`, "the provider's own ledger listing is shown, whatever it says", v.data.service.chain);
 
 const detail = await call("GET", `/api/v1/services/${slug}`);
 check(detail.data.lanes.length === 1 && detail.data.lanes[0].lane_id === LANE + 1 && detail.data.lanes[0].paid_tari === "0.2" && detail.data.lanes[0].state === "open", "receipts show only this provider's lanes", detail.data.lanes);
 check(detail.data.service.stats.paid_microtari === 200000 && detail.data.service.stats.escrow_microtari === 300000 && detail.data.service.stats.open_lanes === 1, "paid and escrow totals", detail.data.service.stats);
-check(detail.data.how_to_pay.provider_key === providerKey && detail.data.how_to_pay.ledger === LEDGER && detail.data.how_to_pay.voucher.domain === "ootle-agent-lane-voucher-v1", "how_to_pay carries key, ledger and voucher format", detail.data.how_to_pay);
-check(detail.data.how_to_pay.rules?.rules_hash === "11".repeat(32), "rules hash comes from governance on-chain", detail.data.how_to_pay.rules);
+const pay = detail.data.how_to_pay;
+check(pay.provider === A.card && pay.ledger === LEDGER && pay.directory === DIRECTORY && pay.voucher.domain === "ootle-agent-lane-voucher-v1", "how_to_pay names the provider card, ledger, directory and voucher format", pay);
+check(pay.admin === null && pay.fee === "none" && pay.lane_close_epochs === 6 && pay.steps.some((s) => s.includes(`open-lane --account <account> ${A.card}`)), "no admin, no fee, close window read from the ledger", pay);
 board = await call("GET", "/api/v1/services?limit=100");
 check(board.data.services.some((s) => s.slug === slug && s.verified), "verified service is on the default board");
 
-// The squatter gets nothing: no receipts, no stats, and it can't verify.
 const squatDetail = await call("GET", `/api/v1/services/${squat.data.service.slug}`);
-check(squatDetail.data.lanes.length === 0 && squatDetail.data.service.stats.paid_microtari === 0 && squatDetail.data.service.chain_status === "listing_mismatch", "a squatted listing shows no receipts", squatDetail.data);
-const again = await call("POST", "/api/v1/services", { key: B.key, body: { ...offer, title: `Late ${sfx}` } });
-check(again.status === 409, "a key that backs a verified service can't be listed again");
+check(squatDetail.data.lanes.length === 0 && squatDetail.data.service.stats.paid_microtari === 0 && squatDetail.data.service.chain_status === "no_card", "a card owned by another key doesn't verify, and shows no receipts", squatDetail.data);
 
 // --- notifications (no discussion thread: database posting is a read-only archive) ---
 check(detail.data.service.discussion === null, "verification opens no database thread", detail.data.service);
@@ -156,7 +146,7 @@ check(types.includes("service_verified") && types.includes("service_lane_opened"
 
 // --- receipts follow the chain ---
 chain.lanes.set(LANE + 1, { ...chain.lanes.get(LANE + 1), claimed: 450000, closing: 7 });
-chain.lanes.set(LANE + 3, { buyer: key(), provider: providerKey, deposited: 100000, claimed: 0 });
+chain.lanes.set(LANE + 3, { buyer: key(), provider: A.card, deposited: 100000, claimed: 0 });
 v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
 const d2 = await call("GET", `/api/v1/services/${slug}`);
 check(d2.data.lanes.length === 2 && d2.data.lanes.find((l) => l.lane_id === LANE + 1).state === "closing" && d2.data.service.stats.paid_tari === "0.45", "claims and closes are picked up", d2.data);
@@ -174,7 +164,7 @@ board = await call("GET", "/api/v1/services?limit=100");
 check(!board.data.services.some((s) => s.slug === slug), "paused services leave the board");
 await call("PATCH", `/api/v1/services/${slug}`, { key: A.key, body: { status: "active" } });
 
-// --- chain unavailable: keep the last good data ---
+// --- chain unavailable or wrong: keep the last good data ---
 chain.failing = true;
 v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
 check(v.status === 502, "indexer outage reported as 502", v.data);
@@ -183,12 +173,16 @@ check(d3.data.service.verified && d3.data.lanes.length === 2, "last good receipt
 const cfg = await call("GET", "/api/v1/lanes");
 check(cfg.data.lanes.last_error?.includes("503"), "the outage shows in /lanes", cfg.data.lanes);
 chain.failing = false;
-
-// A banned provider loses verification.
-chain.providers.set(providerKey, { listing, banned: true });
+chain.directory = "component_" + "77".repeat(32);
 v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
-check(v.data.service.chain_status === "banned" && !v.data.service.verified, "banned on-chain: no longer verified");
-chain.providers.set(providerKey, { listing });
+check(v.status === 502 && v.data.hint.includes("not the official one"), "a ledger over another directory is refused", v.data);
+chain.directory = DIRECTORY;
+
+// A retired card no longer verifies.
+card(A.card, A.owner, "retired");
+v = await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
+check(v.data.service.chain_status === "no_card" && !v.data.service.verified, "retired card: no longer verified");
+card(A.card, A.owner);
 await call("POST", `/api/v1/services/${slug}/verify`, { key: A.key });
 
 // --- removal, docs and pages ---
@@ -196,7 +190,7 @@ const removed = await call("DELETE", `/api/v1/services/${squat.data.service.slug
 const gone = await call("GET", `/api/v1/services/${squat.data.service.slug}`);
 check(removed.status === 200 && gone.status === 404, "owners remove their listings");
 const skill = await (await fetch(`${BASE}/skill.md`)).text();
-check(skill.includes("## 6. Services 🤝") && skill.includes("/services/SLUG/verify") && skill.includes("lane-voucher.mjs"), "skill.md documents the service board");
+check(skill.includes("## 6. Services 🤝") && skill.includes("lanes.mjs open-lane") && skill.includes("lane-voucher.mjs") && !skill.includes("register_provider"), "skill.md documents the service board on lanes v0.2");
 const signer = await fetch(`${BASE}/lane-voucher.mjs`);
 check(signer.ok && (await signer.text()).includes("ootle-agent-lane-voucher-v1"), "voucher signer served at /lane-voucher.mjs");
 for (const page of ["/services", `/services/${slug}`]) {

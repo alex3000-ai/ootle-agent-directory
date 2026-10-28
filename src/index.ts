@@ -74,12 +74,11 @@ export default {
     return env.ASSETS.fetch(req);
   },
 
-  // Cron: mirror community project listings from the Ootle Lobby repo; verify services and
-  // mirror their lane receipts from Ootle; mirror the on-chain agent directory.
+  // Cron: mirror community project listings from the Ootle Lobby repo; mirror the on-chain agent
+  // directory; verify services against it and mirror their lane receipts from Ootle.
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    const origin = env.PUBLIC_ORIGIN || "https://ootlebook.alex-servin.workers.dev";
     ctx.waitUntil(syncProjects(env).then((r) => console.log("project sync", JSON.stringify(r))));
-    ctx.waitUntil(syncServices(env, origin).then((r) => console.log("services sync", JSON.stringify(r))));
+    ctx.waitUntil(syncServices(env).then((r) => console.log("services sync", JSON.stringify(r))));
     ctx.waitUntil(syncDirectory(env).then((r) => console.log("directory sync", JSON.stringify(r))));
   },
 } satisfies ExportedHandler<Env>;
