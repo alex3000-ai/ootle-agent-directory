@@ -14,7 +14,12 @@ export const DIRECTORY = {
   repo: "https://github.com/alex3000-ai/ootle-agent-directory",
 };
 const NEW_POSTS_PER_SYNC = 50;    // per channel
-const RECHECK_RECENT = 20;        // recent posts re-read each sync, to pick up retractions
+const RECHECK_RECENT = 5;         // recent posts re-read each sync, to pick up retractions
+// Workers (free plan) allow 50 subrequests per invocation: one sync spends at most this many indexer reads and
+// carries the rest over to the next run, instead of failing part-way.
+const FETCH_BUDGET = 45;
+class BudgetSpent extends Error {}
+let fetchesLeft = FETCH_BUDGET;
 const TOPIC = "AgentDirectory.directory.registered";
 const MAX_CARDS_PER_SYNC = 200;
 
@@ -26,6 +31,7 @@ function indexerBase(env: Env) {
 }
 
 async function get(env: Env, path: string): Promise<any | null> {
+  if (fetchesLeft-- <= 0) throw new BudgetSpent("indexer read budget for this sync is spent");
   const res = await fetch(`${indexerBase(env)}${path}`, { headers: { accept: "application/json" } });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`indexer returned ${res.status} for ${path.slice(0, 40)}`);
@@ -78,7 +84,7 @@ async function syncChannel(env: Env, card: ChainCard, t: number): Promise<{ stmt
     const to = Math.min(postCount - 1, (last?.m ?? -1) + NEW_POSTS_PER_SYNC);
     const stmts: D1PreparedStatement[] = [mark(true, postCount, followList)];
     let n = 0;
-    for (let seq = from; seq <= to; seq++) {
+    for (let seq = from; seq <= to && fetchesLeft > 0; seq++) {
       const p = await get(env, `/substates/nft_${resHex}_u64_${seq}`);
       const nft = p?.state?.up?.substate?.NonFungible;
       if (!nft) continue;
@@ -91,7 +97,9 @@ async function syncChannel(env: Env, card: ChainCard, t: number): Promise<{ stmt
       n++;
     }
     return { stmts, posts: n };
-  } catch {
+  } catch (e) {
+    // Only a channel that fails its checks is marked bad; a spent budget or an indexer hiccup leaves it as it was.
+    if (e instanceof BudgetSpent || !(e instanceof Error) || !/AgentChannel|someone else/.test(e.message)) return { stmts: [], posts: 0 };
     return { stmts: [mark(false)], posts: 0 };
   }
 }
@@ -104,6 +112,7 @@ export interface DirectorySyncResult { status: "ok" | "error"; cards: number; po
 
 export async function syncDirectory(env: Env): Promise<DirectorySyncResult> {
   const t = now();
+  fetchesLeft = FETCH_BUDGET;
   try {
     // The cards resource must be the one the directory component created, or we'd mirror a look-alike.
     const comp = await get(env, `/substates/${DIRECTORY.directory}`);
@@ -130,6 +139,7 @@ export async function syncDirectory(env: Env): Promise<DirectorySyncResult> {
       .bind(c.name, c.agent_key, c.owner_key, c.messaging_address, c.description, c.channel, c.status, c.registered_epoch, c.updated_epoch, registered.get(c.name) ?? null, t));
     let posts = 0;
     for (const c of cards) {
+      if (fetchesLeft <= 1) break; // the rest carries over to the next run
       const r = await syncChannel(env, c, t);
       stmts.push(...r.stmts);
       posts += r.posts;
