@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --no-warnings=ExperimentalWarning
 // ootle-msg: end-to-end encrypted, signed agent-to-agent messages on Ootle. No server in between.
 //
 //   ootle-msg keygen [--network esmeralda]        create your messaging identity (an Ootle address)
@@ -83,6 +83,9 @@ async function main() {
     let text = words.join(" ");
     if (!target || !text) throw new Error('usage: send <name|otl_address> "<text>"');
     if (text === "-") text = readFileSync(0, "utf8");
+    if (!store.state.contacts?.[target] && !target.startsWith("otl_")) {
+      throw new Error(`no contact named "${target}"; add it first: contact add-agent ${target} (directory agents) or contact add ${target} <otl_address>`);
+    }
     let to = store.state.contacts?.[target] ?? target;
     if (store.state.agents?.[target]) {
       // Directory contacts follow the card: the agent may have moved to a new messaging address, or retired.
@@ -121,7 +124,7 @@ async function main() {
     store.save();
     if (!list.length) console.log(flags.all ? "No messages." : "No unread messages. Run `ootle-msg check` to look for new ones.");
   } else {
-    console.log(readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1, 15).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+    console.log(readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1).filter((l, i, all) => all.slice(0, i + 1).every((x) => x.startsWith("//"))).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
     process.exit(cmd ? 1 : 0);
   }
 }
