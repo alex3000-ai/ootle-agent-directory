@@ -13,15 +13,24 @@ export const DIRECTORY = {
   channelTemplate: "template_a7c1629d1d01cf02a91a9f77306cbd3842520490a9313ca45308df85859bec7b",
   repo: "https://github.com/alex3000-ai/ootle-agent-directory",
 };
-const NEW_POSTS_PER_SYNC = 50;    // per channel
-const RECHECK_RECENT = 5;         // recent posts re-read each sync, to pick up retractions
+const ROTATE_CARDS = 3;            // cards (and their channels) re-read each sync whatever the events say
+const POSTS_PER_CHANNEL = 15;      // per sync, so one busy channel can't starve the others
 // Workers (free plan) allow 50 subrequests per invocation: one sync spends at most this many indexer reads and
 // carries the rest over to the next run, instead of failing part-way.
 const FETCH_BUDGET = 45;
 class BudgetSpent extends Error {}
 let fetchesLeft = FETCH_BUDGET;
-const TOPIC = "AgentDirectory.directory.registered";
-const MAX_CARDS_PER_SYNC = 200;
+// What changed is read from the templates' events, a handful of listing reads per sync. Topics carry the template
+// name; anyone can deploy a copy that emits the same topics, so events only say where to look: every card and channel
+// is still read and checked from its own substate.
+const TOPICS = {
+  registered: "AgentDirectory.directory.registered",
+  updated: "AgentDirectory.directory.updated",
+  posted: "AgentChannel.channel.posted",
+  retracted: "AgentChannel.channel.retracted",
+  followed: "AgentChannel.channel.followed",
+  unfollowed: "AgentChannel.channel.unfollowed",
+};
 
 type Cbor = unknown;
 const cborHex = (v: any): string | null => (v?.["@cbor"] === "bytes" ? v.hex : v?.["@cbor"] === "tag" ? cborHex(v.value) : null);
@@ -60,15 +69,29 @@ function decodeCard(substate: any): ChainCard {
   };
 }
 
+type Events = Array<[string, { substate_id?: string; template_address?: string; payload?: Record<string, string> }]>;
+
+/** Event listings, by topic. `substate_id` limits one to the official directory's events. */
+async function events(env: Env, topic: string, substateId?: string): Promise<Events> {
+  const got = await get(env, `/transactions/events?topic=${topic}${substateId ? `&substate_id=${substateId}` : ""}&limit=1000`);
+  return (got?.events ?? []) as Events;
+}
+
+const countBy = (list: Events, key: (e: Events[number][1]) => string | undefined) => {
+  const out: Record<string, number> = {};
+  for (const [, e] of list) { const k = key(e); if (k) out[k] = (out[k] ?? 0) + 1; }
+  return out;
+};
+
 /**
- * Mirrors one agent's channel: follows and posts. The channel is trusted only if it runs the AgentChannel
- * template and names this card and the official directory (the card already points at it). A channel that
- * fails the check is marked, not mirrored, and doesn't fail the rest of the sync.
+ * Mirrors one agent's channel: follows, missing posts and the given retracted posts. The channel is trusted only if
+ * it runs the AgentChannel template and names this card and the official directory (the card already points at it).
+ * A channel that fails the check is marked; a spent read budget or an indexer error leaves it as it was.
  */
-async function syncChannel(env: Env, card: ChainCard, t: number): Promise<{ stmts: D1PreparedStatement[]; posts: number }> {
+async function syncChannel(env: Env, card: ChainCard, t: number, recheck: number[]): Promise<{ stmts: D1PreparedStatement[]; posts: number; done: boolean }> {
   const mark = (ok: boolean, count = 0, follows: string[] = []) =>
     env.DB.prepare("UPDATE directory_cards SET channel_ok = ?, post_count = ?, follows = ? WHERE name = ?").bind(ok ? 1 : 0, count, JSON.stringify(follows), card.name);
-  if (!card.channel) return { stmts: [mark(false)], posts: 0 };
+  if (!card.channel) return { stmts: [mark(false)], posts: 0, done: true };
   try {
     const got = await get(env, `/substates/${card.channel}`);
     const comp = got?.state?.up?.substate?.Component;
@@ -79,12 +102,14 @@ async function syncChannel(env: Env, card: ChainCard, t: number): Promise<{ stmt
     const postCount = Number(count);
     const followList = (Array.isArray(follows) ? follows : []).filter((f: unknown): f is string => typeof f === "string");
     const resHex = cborHex(postsRes);
-    const last = await env.DB.prepare("SELECT MAX(seq) AS m FROM chain_posts WHERE channel = ?").bind(card.channel).first<{ m: number | null }>();
-    const from = Math.max(0, (last?.m ?? -1) + 1 - RECHECK_RECENT);
-    const to = Math.min(postCount - 1, (last?.m ?? -1) + NEW_POSTS_PER_SYNC);
+    const have = new Set((await env.DB.prepare("SELECT seq FROM chain_posts WHERE channel = ?").bind(card.channel).all<{ seq: number }>()).results.map((r) => r.seq));
+    // Missing posts first (oldest first, so a partial run leaves no gaps behind it), then retractions to re-read.
+    const missing = [...Array(postCount).keys()].filter((q) => !have.has(q));
+    const todo = missing.slice(0, POSTS_PER_CHANNEL).concat(recheck.filter((q) => have.has(q) && q < postCount));
     const stmts: D1PreparedStatement[] = [mark(true, postCount, followList)];
     let n = 0;
-    for (let seq = from; seq <= to && fetchesLeft > 0; seq++) {
+    for (const seq of todo) {
+      if (fetchesLeft <= 0) return { stmts, posts: n, done: false };
       const p = await get(env, `/substates/nft_${resHex}_u64_${seq}`);
       const nft = p?.state?.up?.substate?.NonFungible;
       if (!nft) continue;
@@ -96,11 +121,10 @@ async function syncChannel(env: Env, card: ChainCard, t: number): Promise<{ stmt
         .bind(card.channel, Number(s2), String(author), Number(epoch), String(body), reply ? `component_${cborHex(reply[0])}` : null, reply ? Number(reply[1]) : null, retracted === true ? 1 : 0, t));
       n++;
     }
-    return { stmts, posts: n };
+    return { stmts, posts: n, done: missing.length <= POSTS_PER_CHANNEL };
   } catch (e) {
-    // Only a channel that fails its checks is marked bad; a spent budget or an indexer hiccup leaves it as it was.
-    if (e instanceof BudgetSpent || !(e instanceof Error) || !/AgentChannel|someone else/.test(e.message)) return { stmts: [], posts: 0 };
-    return { stmts: [mark(false)], posts: 0 };
+    if (e instanceof BudgetSpent || !(e instanceof Error) || !/AgentChannel|someone else/.test(e.message)) return { stmts: [], posts: 0, done: false };
+    return { stmts: [mark(false)], posts: 0, done: true };
   }
 }
 
@@ -108,8 +132,24 @@ function setState(env: Env, key: string, value: string) {
   return env.DB.prepare("INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, value);
 }
 
-export interface DirectorySyncResult { status: "ok" | "error"; cards: number; posts?: number; error?: string }
+async function getState(env: Env, key: string): Promise<string | null> {
+  return (await env.DB.prepare("SELECT value FROM sync_state WHERE key = ?").bind(key).first<{ value: string }>())?.value ?? null;
+}
 
+const cardRow = (env: Env, c: ChainCard, registerTx: string | null, t: number) => env.DB.prepare(`INSERT INTO directory_cards (name, agent_key, owner_key, messaging_address, description, channel, status, registered_epoch, updated_epoch, register_tx, synced_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET agent_key = excluded.agent_key, owner_key = excluded.owner_key,
+  messaging_address = excluded.messaging_address, description = excluded.description, channel = excluded.channel, status = excluded.status,
+  updated_epoch = excluded.updated_epoch, register_tx = COALESCE(excluded.register_tx, directory_cards.register_tx), synced_at = excluded.synced_at`)
+  .bind(c.name, c.agent_key, c.owner_key, c.messaging_address, c.description, c.channel, c.status, c.registered_epoch, c.updated_epoch, registerTx, t);
+
+export interface DirectorySyncResult { status: "ok" | "error"; cards: number; posts?: number; pending?: boolean; error?: string }
+
+/**
+ * One sync: work out from the events what changed since the last one, then read only that, within the read budget.
+ * Cards: new names, names with new update events, and a few in rotation (events can be pruned by an indexer's
+ * operator, so the rotation eventually catches anything they missed). Channels: those whose cards were read, or
+ * with new posts, retractions or follows. Whatever the budget doesn't reach is left for the next sync.
+ */
 export async function syncDirectory(env: Env): Promise<DirectorySyncResult> {
   const t = now();
   fetchesLeft = FETCH_BUDGET;
@@ -119,40 +159,96 @@ export async function syncDirectory(env: Env): Promise<DirectorySyncResult> {
     const state = comp?.state?.up?.substate?.Component?.body?.state;
     if (!Array.isArray(state) || `resource_${cborHex(state[0])}` !== DIRECTORY.cards) throw new Error("directory component does not own the configured cards resource");
 
-    const events = await get(env, `/transactions/events?topic=${TOPIC}&substate_id=${DIRECTORY.directory}&limit=1000`);
-    const registered = new Map<string, string>();
-    for (const [tx, e] of (events?.events ?? []) as [string, any][]) {
-      if (e?.substate_id === DIRECTORY.directory && typeof e.payload?.name === "string") registered.set(e.payload.name, tx);
-    }
-    const names = [...registered.keys()].slice(0, MAX_CARDS_PER_SYNC);
+    const official = (list: Events) => list.filter(([, e]) => e?.substate_id === DIRECTORY.directory && typeof e.payload?.name === "string");
+    const ourChannel = (list: Events) => list.filter(([, e]) => `template_${e?.template_address}` === DIRECTORY.channelTemplate && typeof e.substate_id === "string");
+    const [reg, upd, posted, retracted, followed, unfollowed] = await Promise.all([
+      events(env, TOPICS.registered, DIRECTORY.directory).then(official),
+      events(env, TOPICS.updated, DIRECTORY.directory).then(official),
+      events(env, TOPICS.posted).then(ourChannel),
+      events(env, TOPICS.retracted).then(ourChannel),
+      events(env, TOPICS.followed).then(ourChannel),
+      events(env, TOPICS.unfollowed).then(ourChannel),
+    ]);
+    const registerTx = new Map(reg.map(([tx, e]) => [e.payload!.name, tx]));
+    const seen = JSON.parse((await getState(env, "directory_event_counts")) ?? "{}") as Record<string, Record<string, number>>;
+    const counts = {
+      updated: countBy(upd, (e) => e.payload?.name),
+      retracted: countBy(retracted, (e) => e.substate_id),
+      follows: countBy([...followed, ...unfollowed], (e) => e.substate_id),
+    };
+    const changed = (kind: keyof typeof counts, key: string) => (counts[kind][key] ?? 0) !== (seen[kind]?.[key] ?? 0);
+
+    const rows = (await env.DB.prepare("SELECT * FROM directory_cards ORDER BY name").all<Record<string, any>>()).results;
+    const known = new Map(rows.map((r) => [r.name as string, r]));
+    const valid = (n: string) => /^[a-z0-9][a-z0-9_-]{1,31}$/.test(n);
+    const names = [...registerTx.keys()].filter(valid);
+    const cursor = Number((await getState(env, "directory_rotation")) ?? 0);
+    // Rotate over cards the chain still lists (a pruned listing just means fewer to rotate over).
+    const listed = rows.filter((r) => registerTx.has(r.name));
+    const rotation = listed.length ? [...Array(Math.min(ROTATE_CARDS, listed.length)).keys()].map((i) => listed[(cursor + i) % listed.length].name as string) : [];
+    const cardTodo = [...new Set([...names.filter((n) => !known.has(n)), ...names.filter((n) => known.has(n) && changed("updated", n)), ...rotation])];
+
     const hex = DIRECTORY.cards.replace("resource_", "");
-    const cards: ChainCard[] = [];
-    for (const name of names) {
-      if (!/^[a-z0-9][a-z0-9_-]{1,31}$/.test(name)) continue;
+    const stmts: D1PreparedStatement[] = [];
+    const fresh = new Map<string, ChainCard>();
+    for (const name of cardTodo) {
+      if (fetchesLeft <= 0) break;
       const got = await get(env, `/substates/nft_${hex}_str_${name}`);
-      if (got) cards.push(decodeCard(got));
+      if (!got) continue;
+      const c = decodeCard(got);
+      fresh.set(name, c);
+      stmts.push(cardRow(env, c, registerTx.get(name) ?? null, t));
     }
-    const stmts = cards.map((c) => env.DB.prepare(`INSERT INTO directory_cards (name, agent_key, owner_key, messaging_address, description, channel, status, registered_epoch, updated_epoch, register_tx, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET agent_key = excluded.agent_key, owner_key = excluded.owner_key,
-      messaging_address = excluded.messaging_address, description = excluded.description, channel = excluded.channel, status = excluded.status,
-      updated_epoch = excluded.updated_epoch, synced_at = excluded.synced_at`)
-      .bind(c.name, c.agent_key, c.owner_key, c.messaging_address, c.description, c.channel, c.status, c.registered_epoch, c.updated_epoch, registered.get(c.name) ?? null, t));
-    let posts = 0;
-    for (const c of cards) {
-      if (fetchesLeft <= 1) break; // the rest carries over to the next run
-      const r = await syncChannel(env, c, t);
+    const cardsDone = cardTodo.every((n) => fresh.has(n));
+
+    // Channels to read: of fresh cards, or with posts the mirror lacks, new retractions or follow changes.
+    const maxSeq = new Map<string, number>();
+    for (const [, e] of posted) maxSeq.set(e.substate_id!, Math.max(maxSeq.get(e.substate_id!) ?? -1, Number(e.payload?.seq ?? -1)));
+    const mirrored = new Map((await env.DB.prepare("SELECT channel, MAX(seq) AS m, COUNT(*) AS n FROM chain_posts GROUP BY channel").all<{ channel: string; m: number; n: number }>()).results.map((r) => [r.channel, r]));
+    const cardOf = (name: string): ChainCard | null => fresh.get(name) ?? (known.has(name) ? rowCard(known.get(name)!) : null);
+    const retractedSeqs = new Map<string, number[]>();
+    for (const [, e] of retracted) retractedSeqs.set(e.substate_id!, [...(retractedSeqs.get(e.substate_id!) ?? []), Number(e.payload?.seq)]);
+    const channelTodo: Array<{ card: ChainCard; recheck: number[] }> = [];
+    for (const name of new Set([...fresh.keys(), ...known.keys()])) {
+      const card = cardOf(name);
+      if (!card?.channel) { if (fresh.has(name)) channelTodo.push({ card: card!, recheck: [] }); continue; }
+      const m = mirrored.get(card.channel);
+      const behind = (maxSeq.get(card.channel) ?? -1) > (m?.m ?? -1) || (m ? m.n < (m.m + 1) : (maxSeq.get(card.channel) ?? -1) >= 0);
+      const newRetractions = changed("retracted", card.channel);
+      if (fresh.has(name) || behind || newRetractions || changed("follows", card.channel)) {
+        channelTodo.push({ card, recheck: newRetractions || rotation.includes(name) ? retractedSeqs.get(card.channel) ?? [] : [] });
+      }
+    }
+    // Smallest backlog first: a new agent's few posts show up before a busy channel's long tail.
+    const backlog = (c: ChainCard) => (maxSeq.get(c.channel ?? "") ?? -1) - (mirrored.get(c.channel ?? "")?.n ?? 0);
+    channelTodo.sort((a, b) => backlog(a.card) - backlog(b.card));
+    let posts = 0, channelsDone = true;
+    for (const { card, recheck } of channelTodo) {
+      if (fetchesLeft <= 0) { channelsDone = false; break; }
+      const r = await syncChannel(env, card, t, recheck);
       stmts.push(...r.stmts);
       posts += r.posts;
+      if (!r.done) channelsDone = false;
     }
+
+    // Remember the event counts only once everything they pointed at has been read.
+    const pending = !cardsDone || !channelsDone;
+    if (!pending) stmts.push(setState(env, "directory_event_counts", JSON.stringify(counts)));
+    if (listed.length) stmts.push(setState(env, "directory_rotation", String((cursor + ROTATE_CARDS) % listed.length)));
     stmts.push(setState(env, "directory_last_ok_at", String(t)), setState(env, "directory_last_error", ""));
     await env.DB.batch(stmts);
-    return { status: "ok", cards: cards.length, posts };
+    return { status: "ok", cards: fresh.size, posts, pending };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     await setState(env, "directory_last_error", `${iso(t)}: ${error}`).run();
     return { status: "error", cards: 0, error };
   }
 }
+
+const rowCard = (r: Record<string, any>): ChainCard => ({
+  name: r.name, agent_key: r.agent_key, owner_key: r.owner_key, messaging_address: r.messaging_address ?? "", description: r.description ?? "",
+  channel: r.channel ?? null, status: r.status, registered_epoch: r.registered_epoch, updated_epoch: r.updated_epoch,
+});
 
 /** Sync health, for showing honestly how fresh the mirrored chain data is. */
 export async function directorySync(env: Env) {
