@@ -9,8 +9,16 @@
 //   node directory.mjs sign transfer --key-file owner.key --name N --new-owner HEX     (both owners run it)
 //   node directory.mjs register --account agent --name N --owner-key HEX --signature '<json from sign>'
 //          [--messaging otl_…] [--description "…"] [--live]
+//   node directory.mjs set-messaging   --account agent --name N <otl_…|"">     [--live]   (signed by the agent key)
+//   node directory.mjs set-description --account agent --name N "<text>"        [--live]
+//   node directory.mjs rotate   --account A --name N --new-agent-key HEX --signature '<json from sign rotate>' [--live]
+//   node directory.mjs retire   --account A --name N --signature '<json from sign retire>' [--live]
+//   node directory.mjs transfer --account A --name N --new-owner HEX --signature '<current owner json>'
+//          --new-owner-signature '<new owner json>' [--live]
 //   node directory.mjs lookup <name>
 //   node directory.mjs list
+//
+// Owner statements (rotate, retire, transfer) can be submitted from any funded account, e.g. the agent's own.
 //
 // Owner statements are Ristretto Schnorr signatures, e = Blake2b-512(domain || R || P || message) mod l,
 // domain "ootle-agent-directory-v1", over the messages built by the template (see directory/src/lib.rs).
@@ -23,6 +31,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { ristretto255 } from "@noble/curves/ed25519.js";
 import { blake2b } from "@noble/hashes/blake2.js";
+import { callMethod, cbor, submitInstructions } from "./tx.mjs";
 
 const Point = ristretto255.Point;
 const ORDER = Point.Fn.ORDER;
@@ -270,6 +279,40 @@ export async function submit(rpc, { manifestFor, variables, signerIndex, live, c
   return { transaction_id: sent.transaction_id, fee: result.final_fee, result };
 }
 
+// ---- card updates ----
+
+// Card updates write the card and, because reading a card loads the components it references, read its channel.
+// walletd detects neither from the instruction, so they go through transactions.submit with both declared.
+const cardInputs = (name, card) => [{ id: `nft_${deployment().cards.replace("resource_", "")}_str_${name}`, write: true }, ...(card.channel ? [card.channel] : [])];
+const sigArg = (sig) => cbor.array([cbor.uint(0), cbor.array([cbor.array([cbor.bytes([...Buffer.from(sig.public_nonce, "hex")]), cbor.bytes([...Buffer.from(sig.signature, "hex")])])])]);
+const keyArg = (h) => {
+  if (!/^[0-9a-f]{64}$/i.test(h ?? "")) throw new Error("expected a 32-byte public key in hex");
+  return cbor.bytes([...Buffer.from(h, "hex")]);
+};
+
+/** Checks an owner statement against the message the template will rebuild, so a wrong one fails before it costs a fee. */
+function ownerStatement(json, expected, key, what) {
+  const sig = JSON.parse(json ?? "null");
+  if (!sig || sig.message !== expected || !verifyStatement(sig) || sig.public_key !== key) {
+    throw new Error(`the ${what} signature must be over exactly:\n  ${expected}\nby ${key} (run \`sign\` again: the card's nonce may have moved)`);
+  }
+  return sig;
+}
+
+async function updateCard(flags, method, buildArgs) {
+  const name = flags.name;
+  if (!validName(name ?? "")) throw new Error("--name must be 2-32 characters of a-z, 0-9, _ and -");
+  const card = await lookup(name);
+  if (!card) throw new Error(`"${name}" is not registered`);
+  const args = buildArgs(card);
+  const rpc = walletd();
+  const acct = await accountInfo(rpc, flags.account || "agent");
+  return submitInstructions(rpc, {
+    feeAccount: acct.component, signerIndex: acct.index, instructions: [callMethod(deployment().directory, method, [cbor.text(name), ...args])],
+    inputs: cardInputs(name, card), indexer: deployment().indexer, live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
+  });
+}
+
 // ---- command line ----
 
 async function main(argv) {
@@ -319,17 +362,37 @@ async function main(argv) {
       signerIndex: acct.index,
       live: flags.live === true,
       // The fee is reserved before the name fee is withdrawn, so keep the ceiling near a call's real cost.
-      ceiling: Number(flags["max-fee"] ?? 50_000),
+      ceiling: Number(flags["max-fee"] ?? 20_000),
     });
     console.log(r.dry_run ? `Dry run accepted: transaction fee ${r.required_fee} µT plus the ${Number(nameFee) / 1e6} tTARI name fee. Add --live to register.`
       : `Registered "${name}" in ${r.transaction_id} (transaction fee ${r.fee} µT, name fee ${Number(nameFee) / 1e6} tTARI locked)`);
+  } else if (["set-messaging", "set-description", "rotate", "retire", "transfer"].includes(cmd)) {
+    const name = flags.name;
+    const r = await updateCard(flags, {
+      "set-messaging": "set_messaging_address", "set-description": "set_description", rotate: "rotate_agent_key", retire: "retire", transfer: "transfer_owner",
+    }[cmd], (card) => {
+      if (cmd === "set-messaging" || cmd === "set-description") {
+        if (args.length !== 1) throw new Error(`usage: ${cmd} --account A --name N "<value>" [--live]`);
+        return [cbor.text(args[0])];
+      }
+      if (card.status !== "active") throw new Error(`"${name}" is retired`);
+      if (cmd === "rotate") {
+        const sig = ownerStatement(flags.signature, messages.rotate(directory, name, card.nonce, flags["new-agent-key"]), card.owner_key, "owner");
+        return [keyArg(flags["new-agent-key"]), sigArg(sig)];
+      }
+      if (cmd === "retire") return [sigArg(ownerStatement(flags.signature, messages.retire(directory, name, card.nonce), card.owner_key, "owner"))];
+      const message = messages.transfer(directory, name, card.nonce, flags["new-owner"]);
+      return [keyArg(flags["new-owner"]), sigArg(ownerStatement(flags.signature, message, card.owner_key, "current owner")),
+        sigArg(ownerStatement(flags["new-owner-signature"], message, flags["new-owner"], "new owner"))];
+    });
+    console.log(r.dry_run ? `Dry run accepted (${cmd} ${name}): fee ${r.required_fee} µT. Add --live to send.` : `${cmd} ${name}: ${r.transaction_id} (fee ${r.fee} µT)`);
   } else if (cmd === "lookup") {
     const card = await lookup(args[0]);
     console.log(card ? JSON.stringify(card, null, 2) : `"${args[0]}" is not registered`);
   } else if (cmd === "list") {
     for (const a of await list()) console.log(`${a.name}\tagent ${a.agent_key?.slice(0, 12)}…\towner ${a.owner_key?.slice(0, 12)}…`);
   } else {
-    console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 19).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+    console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 27).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
     process.exit(cmd ? 1 : 0);
   }
 }

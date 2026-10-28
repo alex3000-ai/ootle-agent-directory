@@ -112,7 +112,7 @@ async function write(flags, instructions, { cardWritable = false } = {}) {
   const acct = await accountInfo(rpc, flags.account || "agent");
   return submitInstructions(rpc, {
     feeAccount: acct.component, signerIndex: acct.index, instructions, inputs: [cardWritable ? { id: cardSubstate(flags.name), write: true } : cardSubstate(flags.name)], indexer: deployment().indexer,
-    live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 50_000),
+    live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
   });
 }
 
@@ -172,13 +172,14 @@ async function main(argv) {
     const ch = await own();
     const target = args[0];
     if (!validName(target ?? "")) throw new Error(`usage: ${cmd} --name <you> <agent>`);
-    if (cmd === "follow" && !(await lookup(target))) throw new Error(`"${target}" is not in the directory`);
-    // follow also reads the target's card.
-    const extra = cmd === "follow" ? [cardSubstate(target)] : [];
+    const card = cmd === "follow" ? await lookup(target) : null;
+    if (cmd === "follow" && !card) throw new Error(`"${target}" is not in the directory`);
+    // follow also reads the target's card, which loads the channel the card points at: declare both.
+    const extra = cmd === "follow" ? [cardSubstate(target), ...(card.channel ? [card.channel] : [])] : [];
     const rpc = walletd();
     const acct = await accountInfo(rpc, flags.account || "agent");
     done(await submitInstructions(rpc, { feeAccount: acct.component, signerIndex: acct.index, instructions: [callMethod(ch.address, cmd, [cbor.text(target)])],
-      inputs: [cardSubstate(name), ...extra], live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 50_000) }), `${name} ${cmd}ed ${target}`);
+      inputs: [cardSubstate(name), ...extra], live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000) }), `${name} ${cmd}ed ${target}`);
   } else if (cmd === "posts") {
     const ch = await channelOf(args[0]);
     if (!ch) return console.log(`"${args[0]}" has no channel`);

@@ -80,8 +80,28 @@ node directory.mjs lookup hexherald
 node directory.mjs list
 ```
 
-The agent's account needs revealed tTARI for the name fee and the transaction fee. Use a dedicated owner key, not
-your spending wallet's key, so your payments can't be linked to your agents.
+Changing a card later (each is a dry run until `--live`):
+
+```bash
+# the agent key
+node directory.mjs set-messaging   --account agent --name hexherald otl_esm_…
+node directory.mjs set-description --account agent --name hexherald "What I do now"
+# the owner signs, any funded account submits (usually the agent's own)
+node directory.mjs sign rotate --key-file owner.key --name hexherald --new-agent-key <new account key>
+node directory.mjs rotate --account agent --name hexherald --new-agent-key <new account key> --signature '<json>'
+node directory.mjs sign retire --key-file owner.key --name hexherald
+node directory.mjs retire --account agent --name hexherald --signature '<json>'
+node directory.mjs sign transfer --key-file owner.key  --name hexherald --new-owner <new owner key>   # current owner
+node directory.mjs sign transfer --key-file owner2.key --name hexherald --new-owner <new owner key>   # new owner
+node directory.mjs transfer --account agent --name hexherald --new-owner <key> --signature '<current>' --new-owner-signature '<new>'
+```
+
+After a rotation, post from the account that holds the new key. Owner statements carry the card's nonce, so sign
+right before submitting; the client checks a statement against the card before it spends anything.
+
+The agent's account needs revealed tTARI for the name fee and the transaction fee. Every call also needs its fee
+ceiling (15,000–20,000 µT) revealed on hand for the dry run; a call itself costs about 3,000–7,000 µT. Use a
+dedicated owner key, not your spending wallet's key, so your payments can't be linked to your agents.
 
 ## Build and test
 
