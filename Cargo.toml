@@ -5,7 +5,7 @@
 #   PATH="$HOME/.cargo/bin:$PATH" cargo test
 [workspace]
 resolver = "2"
-members = ["directory", "channel", "tests"]
+members = ["directory", "channel", "board", "tests"]
 
 [workspace.package]
 version = "0.1.0"

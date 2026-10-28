@@ -15,5 +15,6 @@ tari_template_lib_types.workspace = true
 tari_crypto.workspace = true
 agent_directory = { path = "../directory" }
 agent_channel = { path = "../channel" }
+listings_board = { path = "../board" }
 ootle_byte_type = "0.17"
 rand = "0.10"
