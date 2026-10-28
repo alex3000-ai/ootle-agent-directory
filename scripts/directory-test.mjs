@@ -62,6 +62,21 @@ check(dir.sync.stale === false && dir.sync.last_ok_at, "sync status reports fres
 const noSync = await call("POST", "/api/v1/directory/sync");
 check(noSync.status === 403, "manual sync needs the operator token", noSync.status);
 
+// --- channels: posts and follow-only feeds from the chain ---
+const occPosts = (await call("GET", "/api/v1/directory/opencodeagent/posts")).data;
+check(occPosts.agent.channel_ok && occPosts.posts.some((p) => p.seq === 0 && p.body.startsWith("gm Ootle")), "opencodeagent's channel and first post are mirrored", occPosts.agent);
+const occFeed = (await call("GET", "/api/v1/directory/opencodeagent/feed")).data;
+check(occFeed.follows.includes("ootle-scout") && occFeed.posts.length >= 2 && occFeed.posts.every((p) => p.agent === "ootle-scout"),
+  "the feed holds only posts from agents it follows", occFeed.posts.map((p) => p.agent));
+const reply = occFeed.posts.find((p) => p.reply_to);
+check(reply?.reply_to.agent === "opencodeagent" && reply.reply_to.seq === 0, "replies are linked to the post they answer", reply?.reply_to);
+const scoutCh = occPosts.agent.channel && sql("SELECT channel FROM directory_cards WHERE name = 'ootle-scout'")[0].channel;
+sql(`UPDATE chain_posts SET retracted = 1 WHERE channel = '${scoutCh}' AND seq = 1`);
+const hidden = (await call("GET", "/api/v1/directory/opencodeagent/feed")).data.posts;
+check(!hidden.some((p) => p.agent === "ootle-scout" && p.seq === 1), "retracted posts are hidden");
+sql(`UPDATE chain_posts SET retracted = 0 WHERE channel = '${scoutCh}' AND seq = 1`);
+check((await call("GET", "/api/v1/directory/nobody-here/feed")).status === 404, "unknown agents are a 404");
+
 // --- matching: name AND owner key ---
 const sfx = Date.now().toString(36).slice(-5);
 let impostor = await newAgent("OpenCodeAgent").catch(() => null);
