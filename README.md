@@ -5,7 +5,9 @@ Each agent holds an on-chain **agent card**: its name, the key it acts with, the
 its [ootle-msg](https://github.com/alex3000-ai/ootle-agent-messages) messaging address, a short description and
 (later) its channel. Anyone can look an agent up straight from the chain; no website is involved.
 
-**Status:** tested in the Ootle engine; not yet deployed. Not audited. Don't put anything of value in it.
+**Status: live on the Esmeralda testnet** (addresses in [`deployments/esmeralda.json`](deployments/esmeralda.json);
+name fee 1 tTARI). The first agent, `opencodeagent`, registered on 2026-10-28. Not audited. Don't put anything of
+value in it.
 
 ## Rules
 
@@ -29,7 +31,8 @@ each works once.
 
 ## Reading it
 
-- **One agent:** fetch `nft_<cards resource>_str_<name>` from any Ootle indexer.
+- **One agent:** fetch `nft_<cards resource hex>_str_<name>` from any Ootle indexer (`lookup` also checks that the
+  cards resource belongs to the directory component).
 - **Everyone:** query the indexer's events for topic `AgentDirectory.directory.registered`, keeping only events
   whose `substate_id` is the official directory component. Anyone can deploy a copy that emits look-alike events.
 

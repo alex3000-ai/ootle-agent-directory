@@ -156,26 +156,58 @@ async function indexer(path) {
   return res.json();
 }
 
-/** Collects every string and number leaf with its key path, so the decoder can work on whatever JSON shape the indexer uses. */
-function leaves(node, path = [], out = []) {
-  if (node && typeof node === "object") for (const [k, v] of Object.entries(node)) leaves(v, [...path, k], out);
-  else out.push([path, node]);
-  return out;
+const cborHex = (v) => (v && typeof v === "object" && v["@cbor"] === "bytes" ? v.hex : v && v["@cbor"] === "tag" ? cborHex(v.value) : null);
+
+/**
+ * Decodes an agent card substate as the indexer serves it: `data` is [name, registered_epoch] and
+ * `mutable_data` is [agent_key, owner_key, messaging_address, description, channel, status, nonce,
+ * updated_epoch], matching `CardInfo` and `Card` in directory/src/lib.rs.
+ */
+export function decodeCard(substate) {
+  const nft = substate?.state?.up?.substate?.NonFungible;
+  if (!nft) throw new Error("not an agent card substate");
+  const [name, registeredEpoch] = nft.data;
+  const [agentKey, ownerKey, messaging, description, channel, status, nonce, updatedEpoch] = nft.mutable_data;
+  return {
+    name,
+    agent_key: cborHex(agentKey),
+    owner_key: cborHex(ownerKey),
+    messaging_address: messaging,
+    description,
+    channel: channel ? `component_${cborHex(channel)}` : null,
+    status: status === 1 ? "retired" : "active",
+    nonce: Number(nonce),
+    registered_epoch: Number(registeredEpoch),
+    updated_epoch: Number(updatedEpoch),
+    indexer_verified: substate.verified === true,
+  };
+}
+
+let checkedDeployment = null;
+/** Confirms the configured cards resource is the one the configured directory component created. */
+export async function checkDeployment() {
+  const { directory, cards } = deployment();
+  if (checkedDeployment === `${directory}|${cards}`) return;
+  const got = await indexer(`/substates/${directory}`);
+  const state = got?.state?.up?.substate?.Component?.body?.state;
+  if (!state || `resource_${cborHex(state[0])}` !== cards) throw new Error(`${cards} is not the cards resource of directory ${directory}`);
+  checkedDeployment = `${directory}|${cards}`;
 }
 
 /** Reads one agent card from the indexer. Returns null if the name is free. */
 export async function lookup(name) {
   if (!validName(name)) throw new Error("not a valid agent name");
-  const { cards, directory } = deployment();
+  const { cards } = deployment();
   if (!cards) throw new Error("no cards resource configured (deployments/esmeralda.json or DIRECTORY_CARDS)");
-  const got = await indexer(`/substates/nft_${cards.replace("resource_", "")}_str_${encodeURIComponent(name)}`);
-  if (!got) return null;
-  return { name, directory, cards, raw: got };
+  await checkDeployment();
+  const got = await indexer(`/substates/nft_${cards.replace("resource_", "")}_str_${name}`);
+  return got ? decodeCard(got) : null;
 }
 
 /** Lists registrations by reading the directory's events. Only events emitted by the configured component count. */
 export async function list({ limit = 100 } = {}) {
   const { directory } = deployment();
+  await checkDeployment();
   const got = await indexer(`/transactions/events?topic=${TEMPLATE_NAME}.directory.registered&substate_id=${directory}&limit=${limit}`);
   return (got?.events ?? [])
     .filter(([, e]) => e.substate_id === directory)
@@ -270,6 +302,8 @@ async function main(argv) {
       variables: { agent: acct.component, directory },
       signerIndex: acct.index,
       live: flags.live === true,
+      // The fee is reserved before the name fee is withdrawn, so keep the ceiling near a call's real cost.
+      ceiling: Number(flags["max-fee"] ?? 50_000),
     });
     console.log(r.dry_run ? `Dry run accepted: transaction fee ${r.required_fee} µT plus the ${Number(nameFee) / 1e6} tTARI name fee. Add --live to register.`
       : `Registered "${name}" in ${r.transaction_id} (transaction fee ${r.fee} µT, name fee ${Number(nameFee) / 1e6} tTARI locked)`);
@@ -287,9 +321,7 @@ async function main(argv) {
 async function cardNonce(name) {
   const card = await lookup(name);
   if (!card) throw new Error(`"${name}" is not registered`);
-  const nonce = leaves(card.raw).find(([p]) => p[p.length - 1] === "nonce");
-  if (!nonce) throw new Error("could not read the card's nonce from the indexer; pass --nonce");
-  return nonce[1];
+  return card.nonce;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

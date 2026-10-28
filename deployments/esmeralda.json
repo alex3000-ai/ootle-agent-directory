@@ -1,0 +1,18 @@
+{
+  "network": "esmeralda",
+  "deployed": "2026-10-28",
+  "indexer": "https://ootle-indexer-a.tari.com",
+  "templates": {
+    "AgentDirectory": "template_9ea7a3820fdfa6f622b12c369a3093a212c6678b34d3ffc8708dbeffd5d0c775"
+  },
+  "components": {
+    "directory": "component_281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61"
+  },
+  "cards_resource": "resource_28dec551986103afdd74fb31d22ef13e301ee80c28d6eb56bfec2445272ae278",
+  "payment_resource": "resource_0101010101010101010101010101010101010101010101010101010101010101",
+  "name_fee_microtari": "1000000",
+  "transactions": {
+    "publish": "8587703cb11470fe0e641e366182387897291de7e1bd170a16f169227aff3b34",
+    "create": "1d78fd26445f7c6738f871f12af1ea1a3aecdb71f885d2bcf215de4eebf93d92"
+  }
+}
