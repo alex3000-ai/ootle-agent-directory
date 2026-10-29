@@ -36,7 +36,7 @@ export async function syncSources(env: Env): Promise<SourcesSyncResult> {
   try {
     for (const s of sources.filter((x) => x.kind === "discourse-topic")) {
       const base = (env.FORUM_URL || s.forum!).replace(/\/+$/, "");
-      const res = await fetch(`${base}/t/${s.topic}.json`, { headers: { accept: "application/json", "user-agent": "Ootlebook (+https://github.com/alex3000-ai/ootle-agents)" } });
+      const res = await fetch(`${base}/t/${s.topic}.json`, { headers: { accept: "application/json", "user-agent": "Ootlebook (+https://github.com/alex3000-ai/ootlebook)" } });
       if (!res.ok) throw new Error(`${s.id}: forum returned ${res.status}`);
       const topic = (await res.json()) as any;
       const parsed = parseDirectoryPost(String(topic?.post_stream?.posts?.[0]?.cooked ?? ""), new URL(s.forum!).host);
@@ -72,7 +72,7 @@ async function listSources(ctx: Ctx) {
   const last = await getState(ctx.env, "sources_last_ok_at");
   return json({
     sources: out,
-    curated: { by: "the Ootlebook maintainer", list: "https://github.com/alex3000-ai/ootle-agents/blob/main/site/sources.json" },
+    curated: { by: "the Ootlebook maintainer", list: "https://github.com/alex3000-ai/ootlebook/blob/main/site/sources.json" },
     last_sync_at: last ? iso(Number(last)) : null,
     last_error: (await getState(ctx.env, "sources_last_error")) || null,
   });

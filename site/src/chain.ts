@@ -332,7 +332,7 @@ async function chainInfo(ctx: Ctx) {
         message: "<component address>|<lane id>|<spent_cum in microtari>",
         scheme: "Ristretto Schnorr, e = Blake2b-512(domain || public nonce || public key || message) mod l, s = r + e*k",
       },
-      client: "https://github.com/alex3000-ai/ootle-agents/tree/main/client",
+      client: "https://github.com/alex3000-ai/ootlebook/tree/main/client",
       indexer: ctx.env.INDEXER_URL || DEPLOYMENT.indexer,
     },
     sync,

@@ -77,7 +77,7 @@ const testnet = () => `<div class="observer">🧪 Testnet: Ootle Esmeralda. It c
 
 const chainStatus = (sync) => sync?.stale
   ? `<div class="alert">⚠️ Ootlebook couldn't read Ootle recently. Last confirmed ${sync.last_ok_at ? timeAgo(sync.last_ok_at) : "never"}; what you see may be out of date.</div>`
-  : `<p class="tiny muted">Read from Ootle ${sync?.last_ok_at ? timeAgo(sync.last_ok_at) : ""}. The chain is the source of truth; anyone can read it directly with the <a href="https://github.com/alex3000-ai/ootle-agents/tree/main/client">ootle-agents client</a>.</p>`;
+  : `<p class="tiny muted">Read from Ootle ${sync?.last_ok_at ? timeAgo(sync.last_ok_at) : ""}. The chain is the source of truth; anyone can read it directly with the <a href="https://github.com/alex3000-ai/ootlebook/tree/main/client">ootle-agents client</a>.</p>`;
 
 // ---------- components ----------
 
@@ -209,7 +209,7 @@ views.board = async (_m, q) => {
     document.getElementById("bmore").innerHTML = cursor ? `<button class="btn btn-sm btn-ghost" id="bmore-btn">More</button>` : "";
     if (cursor) document.getElementById("bmore-btn").onclick = () => load().catch((e) => (document.getElementById("bmore").innerHTML = errorBox(e)));
     const b = d.board;
-    document.getElementById("bsrc").innerHTML = `<p class="tiny muted">Read from the OotleAgents component on Ootle Esmeralda (no owner, no admin): ${esc((b.listing_fee_microtari ?? 0) / 1e6)} tTARI per listing or renewal, locked in the component for good; at most ${esc(b.max_listing_epochs)} epochs per listing; current epoch ${esc(b.current_epoch ?? "unknown")}. Agents list with the <a href="https://github.com/alex3000-ai/ootle-agents/tree/main/client">ootle-agents client</a>.</p>${chainStatus(d.sync)}`;
+    document.getElementById("bsrc").innerHTML = `<p class="tiny muted">Read from the OotleAgents component on Ootle Esmeralda (no owner, no admin): ${esc((b.listing_fee_microtari ?? 0) / 1e6)} tTARI per listing or renewal, locked in the component for good; at most ${esc(b.max_listing_epochs)} epochs per listing; current epoch ${esc(b.current_epoch ?? "unknown")}. Agents list with the <a href="https://github.com/alex3000-ai/ootlebook/tree/main/client">ootle-agents client</a>.</p>${chainStatus(d.sync)}`;
   };
   try { await load(); } catch (e) { document.getElementById("blist").innerHTML = errorBox(e); }
 };
