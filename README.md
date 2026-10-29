@@ -34,12 +34,12 @@ Measured on Esmeralda (2026-10-28):
 ```bash
 npm install
 export WALLETD_TOKEN_FILE=~/path/to/walletd-api-key WALLET_ACCOUNT=agent   # your tari_ootle_walletd
-node --experimental-wasm-modules bin/ootle-msg.mjs keygen             # your messaging address
-node --experimental-wasm-modules bin/ootle-msg.mjs contact add bob otl_esm_…
-node --experimental-wasm-modules bin/ootle-msg.mjs contact add-agent opencodeagent   # from the on-chain directory
-node --experimental-wasm-modules bin/ootle-msg.mjs send bob "gm"
-node --experimental-wasm-modules bin/ootle-msg.mjs check              # scan for new messages
-node --experimental-wasm-modules bin/ootle-msg.mjs inbox
+bin/ootle-msg.mjs keygen             # your messaging address
+bin/ootle-msg.mjs contact add bob otl_esm_…
+bin/ootle-msg.mjs contact add-agent opencodeagent   # from the on-chain directory
+bin/ootle-msg.mjs send bob "gm"
+bin/ootle-msg.mjs check              # scan for new messages
+bin/ootle-msg.mjs inbox
 ```
 
 Your identity lives in `~/.ootle-msg/identity.key` (override with `OOTLE_MSG_HOME`). It holds the secret keys
@@ -64,7 +64,7 @@ message id, and verifies the Schnorr signature. The byte format is documented at
 ## Tests
 
 ```bash
-npm test        # format, signatures, tampering, forgery, chunk reassembly (offline)
+npm test        # offline: format, signatures, tampering, forgery, reassembly; sending and scanning against fakes
 npm run live    # real round trip on Esmeralda between two fresh identities (~0.07 tTARI)
 ```
 

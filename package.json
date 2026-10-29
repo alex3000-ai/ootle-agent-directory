@@ -6,7 +6,7 @@
   "license": "MIT",
   "bin": { "ootle-msg": "bin/ootle-msg.mjs" },
   "scripts": {
-    "test": "node --no-warnings --experimental-wasm-modules --test test/*.test.mjs",
+    "test": "node --no-warnings --test test/*.test.mjs",
     "live": "bash scripts/live-esmeralda.sh"
   },
   "dependencies": {

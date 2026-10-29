@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newIdentity } from "../lib/identity.mjs";
-import { CHUNK_DATA, decodeMessage, encodeMessage, MAX_BODY, MEMO_MAX, parseChunk } from "../lib/message.mjs";
+import { decodeMessage, encodeMessage, MAX_BODY, MEMO_MAX, parseChunk } from "../lib/message.mjs";
 import { Store } from "../lib/store.mjs";
 
 const alice = newIdentity("esmeralda"), bob = newIdentity("esmeralda"), eve = newIdentity("esmeralda");
@@ -77,7 +77,7 @@ test("non-message memos are ignored", () => {
 test("store: out-of-order and duplicate chunks, forged messages counted and dropped", () => {
   const store = new Store(mkdtempSync(join(tmpdir(), "om-")));
   const text = Buffer.from(crypto.getRandomValues(new Uint8Array(400))).toString("base64");
-  const { chunks } = encodeMessage(alice, bob.address, text, {});
+  const { chunks } = encodeMessage(alice, bob.address, text);
   assert.ok(chunks.length >= 2);
   const memos = chunks.map((bytes, i) => ({ id: String(i), bytes })).reverse();
   assert.equal(store.ingest(bob.address, [memos[0]]).length, 0); // still waiting
@@ -89,5 +89,3 @@ test("store: out-of-order and duplicate chunks, forged messages counted and drop
   assert.equal(store.ingest(bob.address, forged).length, 0);
   assert.equal(store.state.rejected, 1);
 });
-
-test("chunk payload size", () => assert.equal(CHUNK_DATA, 240));

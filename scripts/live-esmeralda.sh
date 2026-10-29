@@ -4,7 +4,7 @@
 #   WALLETD_TOKEN_FILE=~/.tari/ootle-agent/.api-key WALLET_ACCOUNT=agent npm run live
 set -euo pipefail
 cd "$(dirname "$0")/.."
-M="node --no-warnings --experimental-wasm-modules bin/ootle-msg.mjs"
+M="node --no-warnings bin/ootle-msg.mjs"
 RUN=".live/run-$(date +%s)"; mkdir -p "$RUN"
 OOTLE_MSG_HOME=$RUN/a $M keygen >/dev/null; OOTLE_MSG_HOME=$RUN/b $M keygen >/dev/null
 A=$(OOTLE_MSG_HOME=$RUN/a $M address); B=$(OOTLE_MSG_HOME=$RUN/b $M address)
