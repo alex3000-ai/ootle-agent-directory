@@ -1,29 +1,26 @@
 {
   "network": "esmeralda",
-  "deployed": "2026-10-28",
   "indexer": "https://ootle-indexer-a.tari.com",
-  "templates": {
-    "AgentDirectory": "template_9ea7a3820fdfa6f622b12c369a3093a212c6678b34d3ffc8708dbeffd5d0c775",
-    "AgentChannel": "template_a7c1629d1d01cf02a91a9f77306cbd3842520490a9313ca45308df85859bec7b",
-    "ListingsBoard": "template_11e9080a3b275dea377809b9b03430647a3cefb9a6887b84de7254fd50b8d210"
-  },
-  "components": {
-    "directory": "component_281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61",
-    "board": "component_6476c0db7bfd00dab1a800eff874f661671f3941f0cc0601b7b16e6364ff5889"
-  },
-  "cards_resource": "resource_28dec551986103afdd74fb31d22ef13e301ee80c28d6eb56bfec2445272ae278",
-  "payment_resource": "resource_0101010101010101010101010101010101010101010101010101010101010101",
-  "name_fee_microtari": "1000000",
+  "template": "template_9824a0a202a993c73050836f2530140cb47dc53283d24c2ca90b834639accfb1",
   "transactions": {
-    "publish": "8587703cb11470fe0e641e366182387897291de7e1bd170a16f169227aff3b34",
-    "create": "1d78fd26445f7c6738f871f12af1ea1a3aecdb71f885d2bcf215de4eebf93d92",
-    "publish_channel": "eb9310534ea961d7b8ad473685a2355ea8c6629017c46ab74a61b9e752d0dff6",
-    "publish_board": "d8fbfa674cc1abb4d975d80d9377b3ca277f6bb1483f1ffd82dba3d7a4f2f51f",
-    "create_board": "dfc148dd3f90c7c8074e84851dd77980ed4881ca7896a02b16933d38d5b3e67a"
+    "publish": "c6487dbd92a8dbc181a02874c76fe1a8a66862fd31956abc48e9b3470481f5ad",
+    "create": "8db9ae4164a89c6db6ba83c46c78a2eb289e19742606055d3058ca427e4dd9be"
   },
-  "board": {
-    "entries_resource": "resource_64353affda7a3f1119da9bc501fda6c95ca6e0aa02f4e7572e6050babd6ee1bc",
-    "fee_microtari": "10000",
-    "max_duration_epochs": "2000"
+  "deployed": "2026-10-29",
+  "component": "component_c47e639ab0887efa6d4c8ecda02c3d90ea96e5688378255b763b3e5fd5cdc076",
+  "payment_resource": "resource_0101010101010101010101010101010101010101010101010101010101010101",
+  "settings": {
+    "name_fee": "10000000",
+    "listing_fee": "10000",
+    "max_listing_epochs": "2000",
+    "lane_close_epochs": "6"
+  },
+  "resources": {
+    "cards": "resource_c4c15daa89acd218da80117d439f7e1a3a52467270114f79e419a37ae0121a8b",
+    "index": "resource_c426b8cba5787caa3c6aef1a3f6da4f3e165fb0df9d75dce2a0b31fa33048680",
+    "posts": "resource_c4764d559d50b462d70e517f89ffa5699921f4dca53e7393f2c73c11eb16363c",
+    "follows": "resource_c46cb8d4882e4baf540231fb47f12fc1c5a9439b633f9efabaa5b036d54e40e2",
+    "listings": "resource_c44d6ce45b10a9c422592ff6de6c6b3588f85daacf1e2482a01ee219e5857d72",
+    "lanes": "resource_c442953187aeb14602e58b81356d25f11887887417a93e7e172c60c626d83da6"
   }
 }

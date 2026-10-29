@@ -4,7 +4,7 @@
 //   ootle-msg keygen [--network esmeralda]        create your messaging identity (an Ootle address)
 //   ootle-msg address                             print your address to share
 //   ootle-msg contact add <name> <otl_address>    remember someone's address
-//   ootle-msg contact add-agent <agent>           look an agent up in the on-chain Ootle Agent Directory
+//   ootle-msg contact add-agent <agent>           look an agent up by its card on the chain (OotleAgents)
 //   ootle-msg send <name|otl_address> "<text>"    send (text "-" reads stdin); needs your wallet daemon
 //   ootle-msg check                               scan the chain for new messages
 //   ootle-msg inbox [--all]                       show unread (or all) messages and mark them read
@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadIdentity, newIdentity, saveIdentity } from "../lib/identity.mjs";
-import { lookupAgent } from "../lib/directory.mjs";
+import { card as lookupAgent } from "../../client/agents.mjs";
 import { addressParts, encodeMessage } from "../lib/message.mjs";
 import { DEFAULT_INDEXER, scan } from "../lib/scan.mjs";
 import { sendChunks, walletd } from "../lib/send.mjs";
@@ -37,10 +37,10 @@ function parseArgs(argv) {
 // Former addresses stay known, so messages sent from an agent's old address still show its name.
 const nameOf = (store, address) => Object.entries(store.state.contacts ?? {}).find(([, a]) => a === address)?.[0] ?? store.state.formerAddresses?.[address];
 
-/** The directory card's current messaging address for a contact added with add-agent. Cards can change. */
+/** The card's current messaging address for a contact added with add-agent. Cards can change. */
 async function agentAddress(name) {
   const card = await lookupAgent(name);
-  if (!card) throw new Error(`"${name}" is not in the Ootle Agent Directory`);
+  if (!card) throw new Error(`"${name}" is not registered on Ootle`);
   if (card.retired) throw new Error(`"${name}" is retired`);
   if (!card.messaging_address) throw new Error(`"${name}" has no messaging address on its card`);
   addressParts(card.messaging_address); // validates
@@ -74,7 +74,7 @@ async function main() {
       store.state.contacts[name] = card.messaging_address;
       (store.state.agents ??= {})[name] = true;
       store.save();
-      console.log(`Saved ${name} from the on-chain directory (owner key ${card.owner_key.slice(0, 12)}…)`);
+      console.log(`Saved ${name} from its card on-chain (owner key ${card.owner_key.slice(0, 12)}…)`);
     } else {
       for (const [n, a] of Object.entries(store.state.contacts)) console.log(`${n}\t${a}`);
     }
@@ -84,11 +84,11 @@ async function main() {
     if (!target || !text) throw new Error('usage: send <name|otl_address> "<text>"');
     if (text === "-") text = readFileSync(0, "utf8");
     if (!store.state.contacts?.[target] && !target.startsWith("otl_")) {
-      throw new Error(`no contact named "${target}"; add it first: contact add-agent ${target} (directory agents) or contact add ${target} <otl_address>`);
+      throw new Error(`no contact named "${target}"; add it first: contact add-agent ${target} (agents with a card) or contact add ${target} <otl_address>`);
     }
     let to = store.state.contacts?.[target] ?? target;
     if (store.state.agents?.[target]) {
-      // Directory contacts follow the card: the agent may have moved to a new messaging address, or retired.
+      // Contacts added from a card follow it: the agent may have moved to a new messaging address, or retired.
       const fresh = (await agentAddress(target)).messaging_address;
       if (fresh !== to) {
         (store.state.formerAddresses ??= {})[to] = target;

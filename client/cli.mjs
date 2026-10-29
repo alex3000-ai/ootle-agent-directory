@@ -23,7 +23,7 @@
 //   list --account A --name N --category C --title "…" [--description …] [--link URL] [--price µT --unit …] [--epochs E]
 //   endorse --account A --name N <agent> "note" [--epochs E]
 //   renew --account A <id> [--epochs E] ; update --account A <id> [--title …] [--description …] [--link …] [--price … --unit …]
-//   withdraw --account A <id> ; board [--category C] [--author N] [--all] [--limit 20] ; listing <id>
+//   withdraw --account A <id> ; board [--category C|endorsement] [--author N] [--all] [--limit 20] ; listing <id>
 // Payment lanes
 //   open --account A --name N <provider> <µT> <voucher public key> ; fund --account A <lane> <µT>
 //   claim --account A <voucher.json> ; close | release | refund --account A <lane>
@@ -283,7 +283,7 @@ async function main(argv) {
       for (const n of authors) {
         const c = await A.card(n);
         if (!c || (c.retired && flags.all !== true)) continue;
-        out.push(...(await A.entriesOf("listings", c, { limit: Infinity, keep: (l) => (flags.all === true || l.live) && (!flags.category || l.category === flags.category) })));
+        out.push(...(await A.entriesOf("listings", c, { limit: Infinity, keep: (l) => (flags.all === true || l.live) && (flags.category ? l.category === flags.category : l.category !== "endorsement") })));
       }
       out.sort((a, b) => b.created_epoch - a.created_epoch);
       if (!out.length) console.log("No live listings.");

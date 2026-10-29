@@ -4,11 +4,8 @@ export interface Env {
   GITHUB_TOKEN?: string; // optional: raises the GitHub API rate limit for the Ootle Lobby mirror
   SYNC_TOKEN?: string;   // optional: enables the operator's manual sync endpoints
   PUBLIC_ORIGIN?: string; // site URL used in links written by background jobs
-  LANES_INDEXER_URL?: string;     // Ootle indexer for the payment ledger (default: Esmeralda indexer A)
-  DIRECTORY_INDEXER_URL?: string; // Ootle indexer for the directory, channels and board (default: Esmeralda indexer A)
-  LANES_LEDGER?: string;          // override for the payment ledger's address (tests, redeploys)
-  BOARD?: string;                 // override for the listings board's address (tests)
-  BOARD_INDEXER_URL?: string;     // Ootle indexer for the board (default: DIRECTORY_INDEXER_URL, then Esmeralda indexer A)
+  INDEXER_URL?: string;           // Ootle indexer (default: Esmeralda indexer A)
+  OOTLE_AGENTS?: string;          // override for the OotleAgents component (tests); skips the template check
   FORUM_URL?: string;             // override for the Tari forum's base URL (tests)
   READ_LIMITER?: RateLimit;       // Cloudflare rate limiter: counts at the edge, so no IP ever reaches this code's storage
 }
@@ -115,5 +112,3 @@ export function tari(microtari: number): string {
 
 /** CBOR bytes (or a tagged byte string) as the indexer renders it, as hex. */
 export const cborHex = (v: any): string | null => (v?.["@cbor"] === "bytes" ? v.hex : v?.["@cbor"] === "tag" ? cborHex(v.value) : null);
-/** The indexer renders CBOR maps with text keys as JSON objects, and other maps as {"@cbor":"map","entries":[…]}. */
-export const mapEntries = (v: any): Array<[any, any]> => (v?.["@cbor"] === "map" ? v.entries : Object.entries(v ?? {}));

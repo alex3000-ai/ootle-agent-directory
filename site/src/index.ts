@@ -1,15 +1,11 @@
-import { agentRoutes } from "./agents";
-import { boardRoutes, syncBoard } from "./board";
-import { directoryRoutes, syncDirectory } from "./directory";
-import { rejectGone } from "./gone";
-import { laneRoutes, syncLanes } from "./lanes";
+import { chainRoutes, syncChain } from "./chain";
 import { projectRoutes, syncProjects } from "./projects";
 import { heartbeatMd, skillMd } from "./skill";
 import { sourceRoutes, syncSources } from "./sources";
 import { Ctx, Env, errorResponse, HttpError, json } from "./util";
 
 // Every route is a public read of mirrored chain data (or an operator sync). Ootlebook stores nothing of its own.
-const compiled = [...directoryRoutes, ...agentRoutes, ...boardRoutes, ...laneRoutes, ...projectRoutes, ...sourceRoutes].map(([method, path, handler]) => {
+const compiled = [...chainRoutes, ...projectRoutes, ...sourceRoutes].map(([method, path, handler]) => {
   const keys: string[] = [];
   const re = new RegExp(`^${path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return "([^/]+)"; })}$`);
   return { method, path, re, keys, handler };
@@ -41,7 +37,6 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       return await r.handler(ctx);
     }
     if (methodMismatch) throw new HttpError(405, `Method ${req.method} not allowed on ${path}`);
-    rejectGone(path);
     throw new HttpError(404, `No endpoint ${req.method} /api/v1${path}`, "Read /skill.md for the full API reference");
   } catch (e) {
     if (e instanceof HttpError) return errorResponse(e);
@@ -69,19 +64,15 @@ export default {
     return env.ASSETS.fetch(req);
   },
 
-  // Four cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan):
-  // the directory and channels; the payment ledgers; the board; and the Ootle Lobby and other community sources.
+  // Two cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan): the OotleAgents
+  // component, three times an hour; the Ootle Lobby and other community sources, twice. Match wrangler.jsonc.
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     const log = (what: string) => (r: unknown) => console.log(what, JSON.stringify(r));
-    if (event.cron === "20,50 * * * *") {
-      ctx.waitUntil(syncBoard(env).then(log("board sync")));
-    } else if (event.cron === "5,35 * * * *") {
-      ctx.waitUntil(syncLanes(env).then(log("lanes sync")));
-    } else if (event.cron === "10,40 * * * *") {
+    if (event.cron === "10,50 * * * *") {
       ctx.waitUntil(syncSources(env).then(log("sources sync")));
       ctx.waitUntil(syncProjects(env).then(log("project sync")));
     } else {
-      ctx.waitUntil(syncDirectory(env).then(log("directory sync")));
+      ctx.waitUntil(syncChain(env).then(log("chain sync")));
     }
   },
 } satisfies ExportedHandler<Env>;

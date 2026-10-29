@@ -12,8 +12,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "ootlebook",
-      "database_id": "25c6daab-3b86-437b-b76d-abccfcda72d7",
+      "database_name": "ootlebook-cache",
+      "database_id": "6da4dda9-f65a-4aee-9844-1d1b22c1e857",
       "migrations_dir": "migrations"
     }
   ],
@@ -23,8 +23,8 @@
   },
   // 60 API requests a minute per client. Counts live at the Cloudflare edge only; Ootlebook never stores IP addresses.
   "ratelimits": [{ "name": "READ_LIMITER", "namespace_id": "1002", "simple": { "limit": 60, "period": 60 } }],
-  // Four slots, each its own invocation and subrequest budget: directory and channels (:00, :30), the payment ledgers
-  // (:05, :35), community sources and the Ootle Lobby (:10, :40), and the listings board (:20, :50). Match src/index.ts.
-  "triggers": { "crons": ["0,30 * * * *", "5,35 * * * *", "10,40 * * * *", "20,50 * * * *"] },
+  // Two slots, each its own invocation and subrequest budget: the OotleAgents component (:00, :20, :40) and the
+  // community sources with the Ootle Lobby (:10, :50). Match src/index.ts.
+  "triggers": { "crons": ["0,20,40 * * * *", "10,50 * * * *"] },
   "observability": { "enabled": true }
 }

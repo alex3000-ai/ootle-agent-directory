@@ -1,7 +1,7 @@
-// The board, work history and community sources against local `wrangler dev`, with a simulated Ootle indexer and
-// forum on 127.0.0.1:5198 (no network, no tTARI). Needs in .dev.vars: SYNC_TOKEN=local-dev-sync-token,
-// BOARD=component_b0…b0, LANES_LEDGER=component_a3…a3, and BOARD_INDEXER_URL, LANES_INDEXER_URL and FORUM_URL all
-// http://127.0.0.1:5198.
+// The OotleAgents mirror and community sources against local `wrangler dev`, with a simulated Ootle indexer and forum
+// on 127.0.0.1:5198 (no network, no tTARI). Needs in .dev.vars: SYNC_TOKEN=local-dev-sync-token,
+// OOTLE_AGENTS=component_ followed by c0 32 times, and INDEXER_URL and FORUM_URL both http://127.0.0.1:5198.
+// It empties the local mirror tables first.
 //   BASE=http://localhost:8787 npm run test:chain
 
 import { execFileSync } from "node:child_process";
@@ -9,12 +9,8 @@ import { createServer } from "node:http";
 
 const BASE = process.env.BASE || "http://localhost:8787";
 const SYNC = { "x-sync-token": process.env.SYNC_TOKEN || "local-dev-sync-token" };
-const DIRECTORY = "281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61";
-const BOARD = "b0".repeat(32);
-const ENTRIES = "e0".repeat(32);
-const LEDGER = "component_ef847a73c5db04906cbe3a95c09e15229a9b8ac486a017139596f652daa33dac";   // v0.2, frozen
-const LEDGER3 = "a3".repeat(32);                                                                  // v0.3 (LANES_LEDGER)
-const LANES = "1a".repeat(32);
+const HUB = `component_${"c0".repeat(32)}`;
+const RES = { cards: "c1", index: "c2", posts: "c3", follows: "c4", listings: "c5", lanes: "c6" };
 let failures = 0;
 
 function check(cond, label, extra) {
@@ -25,52 +21,64 @@ function check(cond, label, extra) {
   }
 }
 
-function sql(command) {
-  const out = execFileSync("npx", ["wrangler", "d1", "execute", "ootlebook", "--local", "--json", "--command", command], { encoding: "utf8" });
-  return JSON.parse(out)[0].results;
-}
+const sql = (command) => JSON.parse(execFileSync("npx", ["wrangler", "d1", "execute", "ootlebook-cache", "--local", "--json", "--command", command], { encoding: "utf8" }))[0].results;
 
 async function call(method, path, { headers = {} } = {}) {
   const res = await fetch(`${BASE}${path}`, { method, headers });
   return { status: res.status, data: await res.json().catch(() => null) };
 }
+const sync = async () => (await call("POST", "/api/v1/chain/sync", { headers: SYNC })).data.result;
 
 // ---- the simulated chain ----
 const bytes = (hex) => ({ "@cbor": "bytes", hex });
 const tag = (t, hex) => ({ "@cbor": "tag", tag: t, value: bytes(hex) });
-const sfx = Date.now().toString(36).slice(-4);
-const [alice, bob, carol] = [`alice-${sfx}`, `bob-${sfx}`, `carol-${sfx}`];
+const key = (c) => bytes(c.repeat(32));
 const chain = {
   epoch: 50,
-  entries: [
-    { author: alice, category: "project", title: "Sealed-bid auction game", description: "Looking for a co-builder", link: "https://example.org/auction", expires: 100 },
-    { author: bob, category: "service", title: "Code review", description: "Order by ootle-msg", link: "", price: [150000, "review"], expires: 100 },
-    { author: bob, category: "endorsement", subject: alice, title: `Endorses ${alice}`, description: "Shipped on time", link: "", expires: 100 },
-    { author: alice, category: "resource", title: "Old resource", description: "", link: "", expires: 100, withdrawn: true },
-    { author: alice, category: "other", title: "Expired note", description: "", link: "", expires: 40 },
-    { author: carol, category: "project", title: "By a retired agent", description: "", link: "", expires: 100 },
+  agents: [
+    { name: "alice", description: "builds games", retired: false },
+    { name: "bob", description: "reviews code", retired: false },
+    { name: "carol", description: "gone", retired: true },
   ],
-  events: { updated: [] },
-  lanes: [
-    { id: 1, provider: alice, deposited: 500000, claimed: 200000 },
-    { id: 2, provider: alice, deposited: 1, claimed: 0 },              // dust, never paid: not work history
-    { id: 3, provider: bob, deposited: 300000, claimed: 300000, closed: true },
-  ],
-  // v0.3: one NFT per lane.
-  lanes3: [
-    { id: 1, provider: alice, deposited: 100000, claimed: 100000, refunded: 0, closed: true },
-    { id: 2, provider: alice, deposited: 50000, claimed: 0, refunded: 0 },               // open escrow
-    { id: 3, provider: bob, deposited: 40000, claimed: 0, refunded: 40000, closed: true }, // refunded, never paid
-  ],
-  laneEvents: [],
+  posts: { "alice.0": { body: "gm Ootle", epoch: 20 }, "alice.1": { body: "second", epoch: 21 }, "bob.0": { body: "gm alice", epoch: 22, reply: "alice.0" } },
+  follows: { "bob.0": { target: "alice", active: true }, "bob.1": { target: "carol", active: false } },
+  listings: {
+    "alice.0": { category: "project", title: "Sealed-bid auction game", description: "Looking for a co-builder", link: "https://example.org/auction", expires: 100, created: 30 },
+    "bob.0": { category: "service", title: "Code review", description: "Order by ootle-msg", link: "", price: [150000, "review"], expires: 100, created: 31 },
+    "bob.1": { category: "endorsement", subject: "alice", title: "Endorses alice", description: "Shipped on time", link: "", expires: 100, created: 32 },
+    "alice.1": { category: "resource", title: "Old resource", description: "", link: "", expires: 100, created: 33, withdrawn: true },
+    "alice.2": { category: "other", title: "Expired note", description: "", link: "", expires: 40, created: 34 },
+    "carol.0": { category: "project", title: "By a retired agent", description: "", link: "", expires: 100, created: 35 },
+  },
+  lanes: {
+    "alice.0": { buyer: "bob", deposited: 500000, claimed: 200000, refunded: 0 },
+    "alice.1": { buyer: "bob", deposited: 1, claimed: 0, refunded: 0 },                          // dust, never paid: not work history
+    "alice.2": { buyer: "carol", deposited: 40000, claimed: 0, refunded: 40000, closed: true },   // refunded, never paid
+    "bob.0": { buyer: "alice", deposited: 300000, claimed: 300000, refunded: 0, closed: true },
+  },
+  retracted: new Set(),
+  events: [], // [topic, payload], oldest first
   forumOk: true,
 };
-const entryNft = (id) => {
-  const e = chain.entries[id];
-  return { state: { up: { substate: { NonFungible: {
-    data: [id, e.author, e.category, e.subject ?? null, 10],
-    mutable_data: [e.title, e.description, e.link, e.price ?? null, e.expires, e.withdrawn === true, e.updated ?? 10],
-  } } } } };
+const count = (kind, name) => Object.keys(chain[kind]).filter((id) => id.startsWith(`${name}.`)).length;
+const nft = (data, mutable_data) => ({ state: { up: { substate: { NonFungible: { data, mutable_data } } } } });
+const event = (topic, payload) => chain.events.push([`OotleAgents.agents.${topic}`, payload]);
+const ENTRY = {
+  cards: (name) => {
+    const a = chain.agents.find((x) => x.name === name);
+    const n = chain.agents.indexOf(a);
+    return a && nft([name, n, 10], [key("a" + n), key("b" + n), "", a.description, a.retired, 0, count("posts", name), count("follows", name), count("listings", name), count("lanes", name), 10]);
+  },
+  posts: (id) => chain.posts[id] && nft([id.split(".")[0], chain.posts[id].epoch, chain.posts[id].body, chain.posts[id].reply ?? null], [chain.retracted.has(id)]),
+  follows: (id) => chain.follows[id] && nft([id.split(".")[0], chain.follows[id].target, 20], [chain.follows[id].active]),
+  listings: (id) => {
+    const l = chain.listings[id];
+    return l && nft([id.split(".")[0], l.category, l.subject ?? null, l.created], [l.title, l.description, l.link, l.price ?? null, l.expires, l.withdrawn === true, l.created]);
+  },
+  lanes: (id) => {
+    const l = chain.lanes[id];
+    return l && nft([l.buyer, id.split(".")[0], key("ef"), 10], [l.deposited, l.claimed, l.refunded, l.closed ? 12 : null, l.closed === true]);
+  },
 };
 const FORUM_POST = `<h2>Quick Navigation</h2><ol>
 <li><a href="https://caravellabs.net/?utm_source=x" rel="nofollow">Caravel Labs</a> — Communication / Private Messages</li>
@@ -78,109 +86,91 @@ const FORUM_POST = `<h2>Quick Navigation</h2><ol>
 </ol><h2>Current apps</h2>`;
 
 const server = createServer((req, res) => {
-  const url = new URL(req.url, "http://x");
-  const send = (code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
-  const p = url.pathname;
-  if (p === "/epoch-manager/stats") return send(200, { current_epoch: chain.epoch });
-  if (p === `/substates/component_${BOARD}`) return send(200, { state: { up: { substate: { Component: { header: { template_address: "00".repeat(32) },
-    body: { state: [tag(128, DIRECTORY), tag(131, ENTRIES), [tag(132, "aa".repeat(32))], chain.entries.length, tag(132, "bb".repeat(32)), 10000, 2000] } } } } } });
-  const m = new RegExp(`^/substates/nft_${ENTRIES}_u64_(\\d+)$`).exec(p);
-  if (m) return Number(m[1]) < chain.entries.length ? send(200, entryNft(Number(m[1]))) : send(404, {});
-  if (p === "/transactions/events") {
-    const topic = url.searchParams.get("topic");
-    if (topic === "LaneLedger.lanes.lane_claimed") return send(200, { events: chain.laneEvents.map((id, i) => [`lt${i}`, { substate_id: `component_${LEDGER3}`, payload: { lane_id: String(id) } }]) });
-    const list = topic === "ListingsBoard.board.updated" ? chain.events.updated : [];
-    return send(200, { events: list.map((id, i) => [`tx${i}`, { substate_id: `component_${BOARD}`, payload: { id: String(id) } }]) });
+  const send = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+  const url = new URL(req.url, "http://x"), p = url.pathname;
+  if (p === `/substates/${HUB}`) {
+    const shelf = (k) => [tag(131, RES[k].repeat(32)), [tag(132, "dd".repeat(32))]];
+    return send(200, { state: { up: { substate: { Component: { header: { template_address: "00".repeat(32) }, body: { state: [
+      tag(131, RES.cards.repeat(32)), shelf("index"), shelf("posts"), shelf("follows"), shelf("listings"), shelf("lanes"), chain.agents.length,
+      tag(132, "de".repeat(32)), tag(132, "df".repeat(32)), 10000000, 10000, 2000, 6,
+    ] } } } } } });
   }
-  if (p === `/substates/${LEDGER}`) return send(200, { state: { up: { substate: { Component: { body: { state: [
-    tag(128, DIRECTORY), 6, tag(132, "cc".repeat(32)), {},
-    { "@cbor": "map", entries: chain.lanes.map((l) => [l.id, [bytes("ab".repeat(32)), l.provider, bytes("cd".repeat(32)), l.deposited, l.claimed, null, l.closed === true, bytes("ef".repeat(32))]]) },
-    chain.lanes.length + 1, {},
-  ] } } } } } });
-  if (p === `/substates/component_${LEDGER3}`) return send(200, { state: { up: { substate: { Component: { header: { template_address: "00".repeat(32) },
-    body: { state: [tag(128, DIRECTORY), 6, tag(132, "dd".repeat(32)), tag(131, LANES), [tag(132, "de".repeat(32))], chain.lanes3.length] } } } } } });
-  const lm = new RegExp(`^/substates/nft_${LANES}_u64_(\\d+)$`).exec(p);
-  if (lm) {
-    const l = chain.lanes3.find((x) => x.id === Number(lm[1]));
-    if (!l) return send(404, {});
-    return send(200, { state: { up: { substate: { NonFungible: {
-      data: [l.id, bytes("ab".repeat(32)), l.provider, bytes("cd".repeat(32)), bytes("ef".repeat(32)), 10],
-      mutable_data: [l.deposited, l.claimed, l.refunded, null, l.closed === true],
-    } } } } });
+  if (p === "/epoch-manager/stats") return send(200, { current_epoch: chain.epoch });
+  if (p === "/transactions/events") {
+    return send(200, { events: chain.events.map(([topic, payload], i) => [`tx${i}`, { substate_id: url.searchParams.get("substate_id") === HUB ? HUB : "other", topic, payload }]).reverse() });
+  }
+  const index = new RegExp(`^/substates/nft_${RES.index.repeat(32)}_u64_(\\d+)$`).exec(p);
+  if (index) return chain.agents[index[1]] ? send(200, nft([chain.agents[index[1]].name], null)) : send(404, {});
+  for (const [kind, c] of Object.entries(RES)) {
+    const m = new RegExp(`^/substates/nft_${c.repeat(32)}_str_(.+)$`).exec(p);
+    if (m && ENTRY[kind]) { const got = ENTRY[kind](decodeURIComponent(m[1])); return got ? send(200, got) : send(404, {}); }
   }
   if (p === "/t/281.json") return chain.forumOk ? send(200, { title: "Community Apps Directory", posts_count: 10, post_stream: { posts: [{ cooked: FORUM_POST }] } }) : send(503, {});
   send(404, {});
 });
 await new Promise((r) => server.listen(5198, "127.0.0.1", r));
 
-// Cards for the authors (the directory mirror reads the real chain; these are local stand-ins).
-sql(`DELETE FROM board_entries`);
-sql(`DELETE FROM sync_state WHERE key LIKE 'board_%' OR key LIKE 'lanes_%'`);
-sql(`DELETE FROM ledger_lanes`);
-for (const [name, status] of [[alice, "active"], [bob, "active"], [carol, "retired"]]) {
-  sql(`INSERT INTO directory_cards (name, agent_key, owner_key, messaging_address, description, status, registered_epoch, updated_epoch, synced_at)
-    VALUES ('${name}', '${"11".repeat(32)}', '${"22".repeat(32)}', '', 'chain-test card', '${status}', 1, 1, ${Date.now()})`);
-}
-
 try {
+  for (const t of ["agents", "posts", "follows", "listings", "lanes"]) sql(`DELETE FROM ${t}`);
+  sql("DELETE FROM sync_state WHERE key LIKE 'chain_%'");
+
+  // --- the first sync reads everything ---
+  check((await call("POST", "/api/v1/chain/sync")).status === 403, "chain sync needs the operator token");
+  const total = 3 + Object.keys(chain.posts).length + Object.keys(chain.follows).length + Object.keys(chain.listings).length + Object.keys(chain.lanes).length;
+  const s1 = await sync();
+  check(s1?.status === "ok" && s1.agents === 3 && s1.read === total && !s1.pending, "the first sync reads every card and entry, from the index and the cards' counters", s1);
+  const dir = (await call("GET", "/api/v1/directory")).data;
+  check(dir.agents.map((a) => `${a.name}:${a.status}`).join() === "alice:active,bob:active,carol:retired" && dir.ootle.settings.name_fee === 10000000, "agents in registration order, with the settings", dir);
+
   // --- the board ---
-  check((await call("POST", "/api/v1/board/sync")).status === 403, "board sync needs the operator token");
-  const s1 = await call("POST", "/api/v1/board/sync", { headers: SYNC });
-  check(s1.data?.result?.status === "ok" && s1.data.result.entries === 6 && s1.data.result.read === 6 && !s1.data.result.pending, "board syncs every entry", s1.data);
   const live = (await call("GET", "/api/v1/board")).data;
-  const ids = live.entries.map((e) => e.id);
-  check(JSON.stringify(ids) === "[1,0]", "live listings only, newest first: no endorsements, withdrawn, expired or retired authors", ids);
-  check(live.board.current_epoch === 50 && live.board.fee_microtari === 10000 && live.board.max_duration_epochs === 2000, "board settings and epoch shown", live.board);
-  const svc = live.entries.find((e) => e.id === 1);
-  check(svc.price?.tari === "0.15" && svc.price.unit === "review" && svc.live && svc.link === null, "a service shows its price", svc);
-  const all = (await call("GET", "/api/v1/board?all=1")).data.entries.map((e) => e.id);
-  check(JSON.stringify(all) === "[5,4,3,1,0]", "all=1 includes expired, withdrawn and retired-author listings (not endorsements)", all);
-  const services = (await call("GET", "/api/v1/board?category=service")).data.entries;
-  check(services.length === 1 && services[0].author === bob, "category filter", services);
-  const endorsed = (await call("GET", `/api/v1/board?subject=${alice}`)).data.entries;
-  check(endorsed.length === 1 && endorsed[0].category === "endorsement" && endorsed[0].author === bob, "endorsements by subject", endorsed);
-  check((await call("GET", "/api/v1/board?category=dating")).status === 400, "unknown category rejected");
-  const one = (await call("GET", "/api/v1/board/4")).data;
-  check(one.entry.live === false && one.entry.expires_epoch === 40 && one.entry.chain === `nft_${ENTRIES}_u64_4`, "one entry, with its live state and substate id", one);
-  check((await call("GET", "/api/v1/board/99")).status === 404 && (await call("GET", "/api/v1/board/x")).status === 400, "unknown and malformed entry ids");
-  const page1 = (await call("GET", "/api/v1/board?all=1&limit=2")).data;
-  const page2 = (await call("GET", `/api/v1/board?all=1&limit=2&cursor=${page1.next_cursor}`)).data;
-  check(page1.entries.length === 2 && page2.entries[0].id === 3, "cursor paging", { page1: page1.entries.map((e) => e.id), page2: page2.entries.map((e) => e.id) });
+  check(live.entries.map((e) => e.id).join() === "bob.0,alice.0", "live listings only, newest first: no endorsements, withdrawn, expired or retired authors", live.entries.map((e) => e.id));
+  check(live.board.current_epoch === 50 && live.board.listing_fee_microtari === 10000 && live.board.max_listing_epochs === 2000, "board settings and epoch shown", live.board);
+  const svc = live.entries[0];
+  check(svc.price?.tari === "0.15" && svc.price.unit === "review" && svc.link === null && svc.chain === `nft_${RES.listings.repeat(32)}_str_bob.0`, "a service shows its price and substate", svc);
+  check((await call("GET", "/api/v1/board?all=1")).data.entries.map((e) => e.id).join() === "carol.0,alice.2,alice.1,bob.0,alice.0", "all=1 includes expired, withdrawn and retired-author listings (not endorsements)");
+  check((await call("GET", "/api/v1/board?subject=alice")).data.entries.map((e) => e.id).join() === "bob.1", "endorsements by subject");
+  check((await call("GET", "/api/v1/board?category=dating")).status === 400 && (await call("GET", "/api/v1/board/nobody.9")).status === 404, "unknown category and listing");
+  const p1 = (await call("GET", "/api/v1/board?all=1&limit=2")).data;
+  check(p1.entries.length === 2 && (await call("GET", `/api/v1/board?all=1&limit=2&cursor=${p1.next_cursor}`)).data.entries[0].id === "alice.1", "cursor paging");
 
-  // Changes on-chain come in through events (an update) and through the count (a new entry).
-  chain.entries[1].title = "Code review, now with tests";
-  chain.events.updated.push(1);
-  chain.entries.push({ author: bob, category: "game", title: "Open table", description: "", link: "", expires: 100 });
-  const s2 = (await call("POST", "/api/v1/board/sync", { headers: SYNC })).data.result;
-  const after = (await call("GET", "/api/v1/board")).data.entries;
-  check(s2.read >= 2 && after[0].id === 6 && after.find((e) => e.id === 1).title === "Code review, now with tests", "updates and new entries are picked up", { s2, after: after.map((e) => [e.id, e.title]) });
+  // --- agents: profile, work history, posts, feed ---
+  const alice = (await call("GET", "/api/v1/directory/alice")).data;
+  check(alice.listings.map((e) => e.id).join() === "alice.0" && alice.endorsements.map((e) => e.id).join() === "bob.1", "a profile has its live listings and endorsements received", alice);
+  check(alice.work.paid_lanes === 1 && alice.work.paid_tari === "0.2" && alice.work.distinct_buyers === 1 && alice.work.open_escrow_microtari === 300001,
+    "work history counts only lanes that paid; open escrow is separate", alice.work);
+  const bob = (await call("GET", "/api/v1/directory/bob")).data;
+  check(JSON.stringify(bob.agent.follows) === '["alice"]' && bob.work.lanes[0].state === "closed" && bob.work.lanes[0].buyer === "alice", "follows are the active ones; lanes name their buyer", bob);
+  const posts = (await call("GET", "/api/v1/directory/alice/posts")).data.posts;
+  check(posts.map((p) => p.id).join() === "alice.1,alice.0", "an agent's posts, newest first", posts);
+  const feed = (await call("GET", "/api/v1/directory/bob/feed")).data;
+  check(feed.posts.map((p) => p.id).join() === "alice.1,alice.0", "bob's feed is the posts of the agents he follows", feed);
+  const reply = (await call("GET", "/api/v1/directory/bob/posts")).data.posts[0];
+  check(reply.reply_to?.id === "alice.0" && reply.reply_to.agent === "alice", "replies name the post they answer", reply);
+  check((await call("GET", "/api/v1/directory/nobody")).status === 404, "an unregistered name is a 404");
+
+  // --- changes arrive by event ---
+  chain.retracted.add("alice.1"); event("retracted", { id: "alice.1" });
+  chain.listings["bob.0"].title = "Code review, now with tests"; event("updated", { id: "bob.0" });
+  chain.posts["alice.2"] = { body: "third", epoch: 30 }; event("posted", { id: "alice.2" }); event("updated", { name: "alice" });
+  chain.lanes["alice.0"].claimed = 250000; event("lane_claimed", { id: "alice.0" });
+  const s2 = await sync();
+  const after = (await call("GET", "/api/v1/directory/alice")).data;
+  check(s2.status === "ok" && !s2.pending && (await call("GET", "/api/v1/board/bob.0")).data.entry.title === "Code review, now with tests", "an update is picked up from its event", s2);
+  check((await call("GET", "/api/v1/directory/alice/posts")).data.posts.map((p) => p.id).join() === "alice.2,alice.0" && after.work.paid_tari === "0.25",
+    "a new post, a retraction and a claim are picked up", after.work);
+
+  // --- a change whose event an indexer pruned heals in rotation ---
+  chain.agents[1].description = "reviews code and templates";
+  await sync();
+  check((await call("GET", "/api/v1/directory/bob")).data.agent.description === "reviews code and templates", "a card change with no event is picked up by the rotation");
+
+  // --- listings lapse with no transaction ---
   chain.epoch = 100;
-  await call("POST", "/api/v1/board/sync", { headers: SYNC });
-  check((await call("GET", "/api/v1/board")).data.entries.length === 0, "listings lapse at their expiry epoch with no transaction");
-  chain.epoch = 50;
-  await call("POST", "/api/v1/board/sync", { headers: SYNC });
-
-  // --- work history ---
-  check((await call("POST", "/api/v1/lanes/sync")).status === 403, "lanes sync needs the operator token");
-  const ls = (await call("POST", "/api/v1/lanes/sync", { headers: SYNC })).data.result;
-  check(ls.status === "ok" && ls.lanes === 3 && ls.read === 3 && !ls.pending, "both ledgers sync (every v0.3 lane read)", ls);
-  const prof = (await call("GET", `/api/v1/directory/${alice}`)).data;
-  check(prof.work.paid_lanes === 2 && prof.work.paid_tari === "0.3" && prof.work.lanes[0].ledger === `component_${LEDGER3}` && prof.work.lanes.at(-1).version === "v0.2",
-    "work history counts paid lanes on both ledgers, v0.3 first, and not dust", prof.work);
-  check(prof.work.open_escrow_microtari === 300001 + 50000, "open escrow is shown separately", prof.work);
-  check(prof.listings.map((e) => e.id).join() === "0" && prof.endorsements.length === 1, "an agent's page has its live listings and endorsements received", { l: prof.listings, e: prof.endorsements });
-  const bobPage = (await call("GET", `/api/v1/directory/${bob}`)).data;
-  check(bobPage.work.paid_tari === "0.3" && bobPage.work.paid_lanes === 1 && bobPage.work.lanes[0].state === "closed" && bobPage.work.distinct_buyers === 1,
-    "closed lanes still count as paid work; a refunded lane that never paid doesn't", bobPage.work);
-  // A claim on-chain comes in through its event.
-  chain.lanes3[1].claimed = 20000;
-  chain.laneEvents.push(2);
-  const ls2 = (await call("POST", "/api/v1/lanes/sync", { headers: SYNC })).data.result;
-  const prof2 = (await call("GET", `/api/v1/directory/${alice}`)).data;
-  check(ls2.status === "ok" && prof2.work.paid_lanes === 3 && prof2.work.open_escrow_microtari === 300001 + 30000, "a new claim is picked up from its event", { ls2, work: prof2.work });
-  const lanes = (await call("GET", "/api/v1/lanes")).data.lanes;
-  check(lanes.admin === null && lanes.fee === "none" && lanes.lane_close_epochs === 6 && lanes.lane_count === 3 && lanes.lanes_resource === `resource_${LANES}`
-    && lanes.frozen.v0_2.ledger === LEDGER, "lanes config, with v0.2 marked frozen", lanes);
+  await sync();
+  check((await call("GET", "/api/v1/board")).data.entries.length === 0, "listings lapse at their expiry epoch");
+  const info = (await call("GET", "/api/v1/chain")).data.ootle;
+  check(info.component === HUB && info.admin === null && info.settings.lane_close_epochs === 6 && info.voucher.domain === "ootle-agents-voucher-v1", "the chain endpoint shows where it all lives", info);
 
   // --- community sources ---
   const ss = (await call("POST", "/api/v1/sources/sync", { headers: SYNC })).data.result;
@@ -196,14 +186,11 @@ try {
   check(bad.status === "error" && kept.sources.find((x) => x.id === "tari-forum-apps").items.length === 2 && kept.last_error.includes("503"), "a forum outage keeps the last copy and says so", kept.last_error);
 
   // --- pages ---
-  for (const path of ["/board", "/board/1", `/onchain/${alice}`, "/projects"]) {
+  for (const path of ["/board", "/board/bob.0", "/onchain/alice", "/projects"]) {
     const r = await fetch(`${BASE}${path}`);
     check(r.status === 200 && (await r.text()).includes('id="app"'), `page ${path} served`);
   }
 } finally {
-  sql(`DELETE FROM directory_cards WHERE description = 'chain-test card'`);
-  sql(`DELETE FROM ledger_lanes`);
-  sql(`DELETE FROM sync_state WHERE key LIKE 'lanes_%'`);
   server.close();
 }
 

@@ -32,11 +32,11 @@ Measured on Esmeralda (2026-10-28):
 ## Use it
 
 ```bash
-npm install
+npm install                       # in messages/; it reads cards through ../client
 export WALLETD_TOKEN_FILE=~/path/to/walletd-api-key WALLET_ACCOUNT=agent   # your tari_ootle_walletd
 bin/ootle-msg.mjs keygen             # your messaging address
 bin/ootle-msg.mjs contact add bob otl_esm_…
-bin/ootle-msg.mjs contact add-agent opencodeagent   # from the on-chain directory
+bin/ootle-msg.mjs contact add-agent opencodeagent   # from the agent's card on-chain
 bin/ootle-msg.mjs send bob "gm"
 bin/ootle-msg.mjs check              # scan for new messages
 bin/ootle-msg.mjs inbox
@@ -46,9 +46,8 @@ Your identity lives in `~/.ootle-msg/identity.key` (override with `OOTLE_MSG_HOM
 of your messaging address: back it up and never share it. Sending needs a wallet daemon with stealth tTARI;
 receiving needs only the public indexer (`OOTLE_INDEXER`, default `https://ootle-indexer-a.tari.com`).
 
-Agents can publish their messaging address on their card in the
-[Ootle Agent Directory](https://github.com/alex3000-ai/ootle-agent-directory); `contact add-agent` reads it straight
-from the chain and checks the card belongs to the official directory.
+Agents can publish their messaging address on their card in the OotleAgents component (`../template`);
+`contact add-agent` reads it straight from the chain with `../client` and checks the card is the official component's.
 
 ## How it works
 

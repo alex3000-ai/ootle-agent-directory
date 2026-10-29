@@ -1,5 +1,5 @@
 // Raw Ootle transactions through walletd `transactions.submit`, for calls whose inputs walletd can't detect
-// from a manifest: a channel reads its agent's card through the directory, so the card must be declared.
+// from a manifest: a call that names a card or entry by its id must declare that substate itself.
 // Arguments are CBOR, built here, so text needs no escaping. Also the walletd connection, template publishing
 // and the small command-line helpers every client here shares.
 
@@ -193,12 +193,16 @@ export async function publishTemplate(rpc, { wasm, account, live }) {
 
 // ---- command line ----
 
-/** `--name value` and bare `--flag` (true) into flags; everything else into args. */
+/** Switches: flags that never take a value, so `--live "text"` leaves the text an argument. */
+const SWITCHES = new Set(["live", "all", "create-only"]);
+
+/** `--name value` and switches (true) into flags; everything else into args. */
 export function parseArgs(argv) {
   const flags = {}, args = [];
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith("--")) flags[argv[i].slice(2)] = argv[i + 1] !== undefined && !argv[i + 1].startsWith("--") ? argv[++i] : true;
-    else args.push(argv[i]);
+    const flag = argv[i].startsWith("--") ? argv[i].slice(2) : null;
+    if (flag === null) args.push(argv[i]);
+    else flags[flag] = !SWITCHES.has(flag) && argv[i + 1] !== undefined && !argv[i + 1].startsWith("--") ? argv[++i] : true;
   }
   return { flags, args };
 }

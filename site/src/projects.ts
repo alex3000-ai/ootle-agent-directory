@@ -172,10 +172,9 @@ async function upsertProject(env: Env, data: Record<string, any>, entry: TreeEnt
   if (await env.DB.prepare("SELECT 1 FROM projects WHERE slug = ?").bind(slug).first()) slug = `${slug}-${category}`.slice(0, 70);
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO projects (slug, source_path, source_sha, category, contest_id, title, summary, card_summary, card_status, creator, repo_url, demo_url,
-      source_url, source_label, technologies, media, published_at, updated_at, raw, discussion_post_id, last_activity_at, first_synced_at, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(slug, entry.path, entry.sha, category, contest, p.title, p.summary, p.card_summary,
-      p.card_status, p.creator, p.repo_url, p.demo_url, p.source_url, p.source_label, p.technologies, p.media, p.published_at, p.updated_at, JSON.stringify(data),
-      null, p.published_at, t, t),
+      source_url, source_label, technologies, media, published_at, updated_at, raw, first_synced_at, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(slug, entry.path, entry.sha, category, contest, p.title, p.summary, p.card_summary,
+      p.card_status, p.creator, p.repo_url, p.demo_url, p.source_url, p.source_label, p.technologies, p.media, p.published_at, p.updated_at, JSON.stringify(data), t, t),
   ]);
   return "added";
 }
@@ -224,7 +223,6 @@ function projectOut(p: Record<string, any>, origin: string, full = false) {
       original_post: p.source_url,
     },
     published_at: iso(p.published_at),
-    last_activity_at: iso(p.last_activity_at),
   };
   if (!full) return base;
   return {
@@ -262,7 +260,7 @@ async function listProjects(ctx: Ctx) {
     binds.push(like, like, like, like);
   }
   const sort = sp.get("sort") || "active";
-  const order = sort === "new" ? "published_at DESC" : sort === "alpha" ? "title COLLATE NOCASE" : "last_activity_at DESC, title";
+  const order = sort === "new" ? "published_at DESC" : sort === "alpha" ? "title COLLATE NOCASE" : "COALESCE(updated_at, published_at) DESC, title";
   const limit = clampInt(sp.get("limit"), 50, 1, 100);
   const offset = decodeCursor(sp.get("cursor"));
   const rows = await ctx.env.DB.prepare(`SELECT * FROM projects WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...binds, limit + 1, offset).all();

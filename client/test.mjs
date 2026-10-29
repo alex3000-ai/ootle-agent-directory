@@ -69,7 +69,7 @@ test("each call declares the substates it writes as writable and the cards it re
   for (const [name, [call, inputs]] of Object.entries(cases)) assert.deepEqual(call.inputs, inputs, name);
 });
 
-import { callMethod, cbor, feeWithMargin, rejection, submitInstructions } from "./tx.mjs";
+import { callMethod, cbor, feeWithMargin, parseArgs, rejection, submitInstructions } from "./tx.mjs";
 const h = (b) => Buffer.from(b).toString("hex");
 
 test("CBOR arguments match what walletd's manifest compiler produced on Esmeralda", () => {
@@ -134,4 +134,8 @@ test("submit: a rejected dry run, or one above the ceiling, sends nothing", asyn
   const dry = await fakeSubmit({ live: false });
   assert.deepEqual(dry.result, { dry_run: true, required_fee: 4000 });
   assert.equal(submitted(dry.calls).length, 0);
+});
+
+test("switches never swallow the argument after them", () => {
+  assert.deepEqual(parseArgs(["--name", "a", "--live", "gm", "Ootle", "--limit", "5", "--all"]), { flags: { name: "a", live: true, limit: "5", all: true }, args: ["gm", "Ootle"] });
 });
