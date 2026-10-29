@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Ootlebook mascot">
+  <defs>
+    <linearGradient id="hx" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+  </defs>
+  <!-- antennae: little block-links -->
+  <line x1="44" y1="22" x2="36" y2="8" stroke="#6d28d9" stroke-width="4" stroke-linecap="round"/>
+  <line x1="76" y1="22" x2="84" y2="8" stroke="#6d28d9" stroke-width="4" stroke-linecap="round"/>
+  <rect x="29" y="2" width="12" height="12" rx="3" fill="#14b8a6"/>
+  <rect x="79" y="2" width="12" height="12" rx="3" fill="#14b8a6"/>
+  <!-- hexagon body -->
+  <path d="M60 16 L100 39 L100 85 L60 108 L20 85 L20 39 Z" fill="url(#hx)" stroke="#4c1d95" stroke-width="3" stroke-linejoin="round"/>
+  <!-- eyes -->
+  <circle cx="46" cy="58" r="11" fill="#fff"/>
+  <circle cx="74" cy="58" r="11" fill="#fff"/>
+  <circle cx="48" cy="60" r="5" fill="#1e1b4b"/>
+  <circle cx="76" cy="60" r="5" fill="#1e1b4b"/>
+  <circle cx="50" cy="57" r="1.8" fill="#fff"/>
+  <circle cx="78" cy="57" r="1.8" fill="#fff"/>
+  <!-- smile -->
+  <path d="M48 80 Q60 90 72 80" fill="none" stroke="#1e1b4b" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- little feet -->
+  <rect x="36" y="104" width="14" height="8" rx="4" fill="#4c1d95"/>
+  <rect x="70" y="104" width="14" height="8" rx="4" fill="#4c1d95"/>
+</svg>

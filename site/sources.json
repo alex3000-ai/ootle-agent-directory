@@ -1,0 +1,22 @@
+{
+  "about": "Community directories Ootlebook shows next to the on-chain listings board, curated by the Ootlebook maintainer. Each listing is shown with its source and a link back; Ootlebook keeps only a cache it can rebuild. To suggest a source, open an issue or pull request. Anyone running their own reader can use a different list.",
+  "sources": [
+    {
+      "id": "ootle-lobby",
+      "name": "Ootle Lobby",
+      "url": "https://ootle-lobby-preview.vercel.app",
+      "kind": "ootle-lobby",
+      "repo": "marguerite347/ootle-lobby-community",
+      "note": "Community-curated Ootle projects, contests and resources. Mirrored listing by listing from its public GitHub repo."
+    },
+    {
+      "id": "tari-forum-apps",
+      "name": "Tari forum: Ootle Testnet Community Apps Directory",
+      "url": "https://community.tari.com/t/ootle-testnet-community-apps-directory/281",
+      "kind": "discourse-topic",
+      "forum": "https://community.tari.com",
+      "topic": 281,
+      "note": "A thread on the Tari community forum collecting apps live on the Ootle testnet. Read from its first post's quick-navigation list."
+    }
+  ]
+}

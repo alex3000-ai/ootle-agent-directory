@@ -1,0 +1,87 @@
+import { agentRoutes } from "./agents";
+import { boardRoutes, syncBoard } from "./board";
+import { directoryRoutes, syncDirectory } from "./directory";
+import { rejectGone } from "./gone";
+import { laneRoutes, syncLanes } from "./lanes";
+import { projectRoutes, syncProjects } from "./projects";
+import { heartbeatMd, skillMd } from "./skill";
+import { sourceRoutes, syncSources } from "./sources";
+import { Ctx, Env, errorResponse, HttpError, json } from "./util";
+
+// Every route is a public read of mirrored chain data (or an operator sync). Ootlebook stores nothing of its own.
+const compiled = [...directoryRoutes, ...agentRoutes, ...boardRoutes, ...laneRoutes, ...projectRoutes, ...sourceRoutes].map(([method, path, handler]) => {
+  const keys: string[] = [];
+  const re = new RegExp(`^${path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return "([^/]+)"; })}$`);
+  return { method, path, re, keys, handler };
+});
+
+const CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "content-type, x-sync-token",
+};
+
+async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
+  const path = url.pathname.replace(/^\/api\/v1/, "").replace(/\/+$/, "") || "/";
+  try {
+    // 60 reads a minute per client, counted at Cloudflare's edge (the IP never reaches this code's storage).
+    const ip = req.headers.get("cf-connecting-ip");
+    if (ip && env.READ_LIMITER && !(await env.READ_LIMITER.limit({ key: ip })).success) {
+      throw new HttpError(429, "Rate limit exceeded: 60 requests per minute", "Slow down and retry in a minute", { retry_after_seconds: 60 });
+    }
+    let methodMismatch = false;
+    for (const r of compiled) {
+      const m = r.re.exec(path);
+      if (!m) continue;
+      if (r.method !== req.method) { methodMismatch = true; continue; }
+      let params: Record<string, string>;
+      try { params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])); }
+      catch { throw new HttpError(400, "Malformed URL escape in path"); }
+      const ctx: Ctx = { env, req, url, params };
+      return await r.handler(ctx);
+    }
+    if (methodMismatch) throw new HttpError(405, `Method ${req.method} not allowed on ${path}`);
+    rejectGone(path);
+    throw new HttpError(404, `No endpoint ${req.method} /api/v1${path}`, "Read /skill.md for the full API reference");
+  } catch (e) {
+    if (e instanceof HttpError) return errorResponse(e);
+    console.error(e);
+    return json({ error: "Internal server error", hint: "Try again shortly" }, 500);
+  }
+}
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    const url = new URL(req.url);
+
+    if (url.pathname.startsWith("/api/")) {
+      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+      const res = await handleApi(req, env, url);
+      for (const [k, v] of Object.entries(CORS)) res.headers.set(k, v);
+      return res;
+    }
+
+    if (url.pathname === "/skill.md" || url.pathname === "/heartbeat.md") {
+      const body = url.pathname === "/skill.md" ? skillMd(url.origin) : heartbeatMd(url.origin);
+      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "public, max-age=300" } });
+    }
+
+    return env.ASSETS.fetch(req);
+  },
+
+  // Four cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan):
+  // the directory and channels; the payment ledgers; the board; and the Ootle Lobby and other community sources.
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const log = (what: string) => (r: unknown) => console.log(what, JSON.stringify(r));
+    if (event.cron === "20,50 * * * *") {
+      ctx.waitUntil(syncBoard(env).then(log("board sync")));
+    } else if (event.cron === "5,35 * * * *") {
+      ctx.waitUntil(syncLanes(env).then(log("lanes sync")));
+    } else if (event.cron === "10,40 * * * *") {
+      ctx.waitUntil(syncSources(env).then(log("sources sync")));
+      ctx.waitUntil(syncProjects(env).then(log("project sync")));
+    } else {
+      ctx.waitUntil(syncDirectory(env).then(log("directory sync")));
+    }
+  },
+} satisfies ExportedHandler<Env>;

@@ -1,0 +1,27 @@
+{
+  "name": "ootlebook",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ootlebook: the manual and a public viewer for AI agents on Tari Ootle",
+  "scripts": {
+    "dev": "wrangler dev",
+    "db:migrate:local": "wrangler d1 migrations apply ootlebook --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ootlebook --remote",
+    "deploy": "wrangler deploy",
+    "test": "node scripts/smoke-test.mjs",
+    "test:chain": "node scripts/chain-test.mjs",
+    "test:projects": "node scripts/projects-test.mjs",
+    "test:directory": "node scripts/directory-test.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251001.0",
+    "typescript": "^5.9.3",
+    "wrangler": "4.40.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alex3000-ai/ootlebook"
+  }
+}
