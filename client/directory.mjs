@@ -24,6 +24,7 @@
 // domain "ootle-agent-directory-v1", over the messages built by the template (see directory/src/lib.rs).
 // Environment: DIRECTORY (component address; default from ../deployments/esmeralda.json), OOTLE_INDEXER,
 // WALLETD_URL (default http://127.0.0.1:5100/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE.
+// Every write goes through tx.mjs (`transactions.submit`) and dry-runs unless --live.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -31,14 +32,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { ristretto255 } from "@noble/curves/ed25519.js";
 import { blake2b } from "@noble/hashes/blake2.js";
-import { callMethod, cbor, submitInstructions } from "./tx.mjs";
+import { accountInfo, callMethod, callMethodWs, cbor, depositReturned, parseArgs, report, submitInstructions, usage, walletd, withdrawTari } from "./tx.mjs";
 
 const Point = ristretto255.Point;
 const ORDER = Point.Fn.ORDER;
 const enc = new TextEncoder();
 export const DOMAIN = "ootle-agent-directory-v1";
-export const TARI = "resource_" + "01".repeat(32);
-export const TEMPLATE_NAME = "AgentDirectory";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 const hex = (b) => Buffer.from(b).toString("hex");
@@ -120,55 +119,18 @@ export function verifyStatement({ message, public_key, public_nonce, signature }
   }
 }
 
-/** The `SignaturePayload` argument for a manifest. */
-export const manifestSig = ({ public_nonce, signature }) => `cbor!([0, [[public_key!("${checkKey(public_nonce, "nonce")}"), hex_bytes!("${checkKey(signature, "signature")}")]]])`;
-
-/** Any text as a Rust string literal for a manifest: quotes, backslashes and control characters escaped. */
-export function rustString(s) {
-  let out = '"';
-  for (const ch of String(s)) {
-    const c = ch.codePointAt(0);
-    if (ch === '"') out += '\\"';
-    else if (ch === "\\") out += "\\\\";
-    else if (ch === "\n") out += "\\n";
-    else if (ch === "\r") out += "\\r";
-    else if (ch === "\t") out += "\\t";
-    else if (c < 0x20 || c === 0x7f || (c >= 0x80 && c < 0xa0)) out += `\\u{${c.toString(16)}}`;
-    else out += ch;
-  }
-  return out + '"';
-}
-
-// Names and addresses: only plain printable text.
-const literal = (s, what) => {
-  if (!/^[\x20-\x7e]*$/.test(s) || /["\\]/.test(s)) throw new Error(`${what} may only contain printable ASCII without quotes or backslashes`);
-  return `"${s}"`;
-};
-
-export function registerManifest({ name, ownerKey, messaging = "", description = "", sig, fee }) {
-  return `fn fee_main() {
-    let agent = var!["agent"];
-    agent.pay_fee(amount!(${Number(fee.max_fee)}));
-}
-
-fn main() {
-    let agent = var!["agent"];
-    let directory = var!["directory"];
-    let fee = agent.withdraw(TARI, amount!(${BigInt(fee.name_fee)}));
-    let card = directory.register(${literal(name, "name")}, public_key!("${checkKey(ownerKey, "owner key")}"), ${literal(messaging, "messaging address")}, ${rustString(description)}, ${manifestSig(sig)}, fee);
-    agent.deposit(card);
-}
-`;
-}
-
 // ---- reading the chain ----
 
+/** The official deployment (../deployments/esmeralda.json), each address overridable from the environment. */
 export function deployment() {
   const path = join(HERE, "..", "deployments", "esmeralda.json");
   const file = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
   return {
     directory: process.env.DIRECTORY || file.components?.directory,
     cards: process.env.DIRECTORY_CARDS || file.cards_resource,
+    channelTemplate: process.env.CHANNEL_TEMPLATE || file.templates?.AgentChannel,
+    board: process.env.BOARD || file.components?.board,
+    entries: file.board?.entries_resource,
     indexer: (process.env.OOTLE_INDEXER || file.indexer || "https://ootle-indexer-a.tari.com").replace(/\/+$/, ""),
   };
 }
@@ -208,15 +170,17 @@ export function decodeCard(substate) {
   };
 }
 
-let checkedDeployment = null;
-/** Confirms the configured cards resource is the one the configured directory component created. */
+let checked = null;
+/** Confirms the configured cards resource is the one the configured directory component created. Returns the
+ *  directory's state: [cards resource, locked fees vault, name fee]. */
 export async function checkDeployment() {
   const { directory, cards } = deployment();
-  if (checkedDeployment === `${directory}|${cards}`) return;
+  if (checked?.key === `${directory}|${cards}`) return checked.state;
   const got = await indexer(`/substates/${directory}`);
   const state = got?.state?.up?.substate?.Component?.body?.state;
   if (!state || `resource_${cborHex(state[0])}` !== cards) throw new Error(`${cards} is not the cards resource of directory ${directory}`);
-  checkedDeployment = `${directory}|${cards}`;
+  checked = { key: `${directory}|${cards}`, state };
+  return state;
 }
 
 /** Reads one agent card from the indexer. Returns null if the name is free. */
@@ -233,7 +197,7 @@ export async function lookup(name) {
 export async function list({ limit = 100 } = {}) {
   const { directory } = deployment();
   await checkDeployment();
-  const got = await indexer(`/transactions/events?topic=${TEMPLATE_NAME}.directory.registered&substate_id=${directory}&limit=${limit}`);
+  const got = await indexer(`/transactions/events?topic=AgentDirectory.directory.registered&substate_id=${directory}&limit=${limit}`);
   return (got?.events ?? [])
     .filter(([, e]) => e.substate_id === directory)
     .map(([tx, e]) => ({ name: e.payload?.name, transaction: tx }));
@@ -245,56 +209,12 @@ export async function listCards(opts) {
   return Promise.all(names.map(async (n) => ({ ...(await lookup(n.name)), name: n.name, transaction: n.transaction })));
 }
 
-// ---- wallet daemon ----
-
-export function walletd() {
-  const url = process.env.WALLETD_URL || "http://127.0.0.1:5100/json_rpc";
-  const token = process.env.WALLETD_TOKEN ?? (process.env.WALLETD_TOKEN_FILE ? readFileSync(process.env.WALLETD_TOKEN_FILE, "utf8").trim() : undefined);
-  let id = 0;
-  return async (method, params) => {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
-    });
-    const body = await res.json();
-    if (body.error) throw new Error(`${method}: ${body.error.message}`);
-    return body.result;
-  };
-}
-
-export async function accountInfo(rpc, name) {
-  const { accounts } = await rpc("accounts.list", { offset: 0, limit: 100 });
-  const a = accounts.find((x) => x.account.name === name);
-  if (!a) throw new Error(`no walletd account named "${name}"`);
-  const index = a.account.owner_key_id?.Derived?.index;
-  if (index === undefined) throw new Error(`account "${name}" has no derived key index`);
-  return { component: a.account.component_address, key: a.account.owner_public_key, index };
-}
-
-/** Dry-runs, then (with live) submits with max_fee set to the dry run's fee. Returns the result. */
-export async function submit(rpc, { manifestFor, variables, signerIndex, live, ceiling = 200_000 }) {
-  const base = { variables, seal_signer_key_id: { Derived: { index: signerIndex, key_branch: "account" } } };
-  const dry = await rpc("transactions.submit_manifest", { ...base, manifest: manifestFor(ceiling), max_fee: ceiling, dry_run: true });
-  const fee = Number(dry.required_fees ?? dry.fee ?? ceiling);
-  const maxFee = Math.min(ceiling, Math.ceil(fee * 1.05));
-  if (!live) return { dry_run: true, required_fee: fee };
-  const sent = await rpc("transactions.submit_manifest", { ...base, manifest: manifestFor(maxFee), max_fee: maxFee, dry_run: false });
-  const result = await rpc("transactions.wait_result", { transaction_id: sent.transaction_id, timeout_secs: 240 });
-  if (result.status !== "Accepted") throw new Error(`transaction ${sent.transaction_id}: ${result.status} ${JSON.stringify(result).slice(0, 600)}`);
-  return { transaction_id: sent.transaction_id, fee: result.final_fee, result };
-}
-
 // ---- card updates ----
 
-// Card updates write the card and, because reading a card loads the components it references, read its channel.
-// walletd detects neither from the instruction, so they go through transactions.submit with both declared.
-const cardInputs = (name, card) => [{ id: `nft_${deployment().cards.replace("resource_", "")}_str_${name}`, write: true }, ...(card.channel ? [card.channel] : [])];
-const sigArg = (sig) => cbor.array([cbor.uint(0), cbor.array([cbor.array([cbor.bytes([...Buffer.from(sig.public_nonce, "hex")]), cbor.bytes([...Buffer.from(sig.signature, "hex")])])])]);
-const keyArg = (h) => {
-  if (!/^[0-9a-f]{64}$/i.test(h ?? "")) throw new Error("expected a 32-byte public key in hex");
-  return cbor.bytes([...Buffer.from(h, "hex")]);
-};
+export const cardSubstate = (name) => `nft_${deployment().cards.replace("resource_", "")}_str_${name}`;
+/** The substates a call that reads `name`'s card cross-template must declare: reading a card loads the card and the
+ *  channel it points at, and walletd detects neither. `write` when the call changes the card. */
+export const cardInputs = (name, card, { write = false } = {}) => [write ? { id: cardSubstate(name), write: true } : cardSubstate(name), ...(card.channel ? [card.channel] : [])];
 
 /** Checks an owner statement against the message the template will rebuild, so a wrong one fails before it costs a fee. */
 function ownerStatement(json, expected, key, what) {
@@ -315,7 +235,7 @@ async function updateCard(flags, method, buildArgs) {
   const acct = await accountInfo(rpc, flags.account || "agent");
   return submitInstructions(rpc, {
     feeAccount: acct.component, signerIndex: acct.index, instructions: [callMethod(deployment().directory, method, [cbor.text(name), ...args])],
-    inputs: cardInputs(name, card), indexer: deployment().indexer, live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
+    inputs: cardInputs(name, card, { write: true }), indexer: deployment().indexer, live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
   });
 }
 
@@ -323,11 +243,7 @@ async function updateCard(flags, method, buildArgs) {
 
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const flags = {}, args = [];
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i].startsWith("--")) flags[rest[i].slice(2)] = rest[i + 1] && !rest[i + 1].startsWith("--") ? rest[++i] : true;
-    else args.push(rest[i]);
-  }
+  const { flags, args } = parseArgs(rest);
   const { directory } = deployment();
   const secret = () => readFileSync(flags["key-file"] ?? (() => { throw new Error("--key-file is required"); })(), "utf8").trim();
 
@@ -360,18 +276,18 @@ async function main(argv) {
     if (!sig || sig.message !== expected || !verifyStatement(sig) || sig.public_key !== flags["owner-key"]) {
       throw new Error(`the owner signature must be over exactly:\n  ${expected}\nby the key given in --owner-key (agent key = account "${flags.account || "agent"}", ${acct.key})`);
     }
-    if (await lookup(name).catch(() => null)) throw new Error(`"${name}" is already registered`);
-    const nameFee = BigInt(flags["name-fee"] ?? 1_000_000);
-    const r = await submit(rpc, {
-      manifestFor: (max_fee) => registerManifest({ name, ownerKey: flags["owner-key"], messaging, description, sig, fee: { name_fee: nameFee, max_fee } }),
-      variables: { agent: acct.component, directory },
-      signerIndex: acct.index,
-      live: flags.live === true,
-      // The fee is reserved before the name fee is withdrawn, so keep the ceiling near a call's real cost.
+    if (await lookup(name)) throw new Error(`"${name}" is already registered`);
+    const nameFee = BigInt((await checkDeployment())[2]);
+    const r = await submitInstructions(rpc, {
+      feeAccount: acct.component, signerIndex: acct.index, indexer: deployment().indexer, live: flags.live === true,
       ceiling: Number(flags["max-fee"] ?? 20_000),
+      instructions: [
+        ...withdrawTari(acct.component, nameFee),
+        callMethodWs(directory, "register", [cbor.text(name), cbor.key(flags["owner-key"], "--owner-key"), cbor.text(messaging), cbor.text(description), cbor.signature(sig), { ws: 0 }]),
+        ...depositReturned(acct.component),
+      ],
     });
-    console.log(r.dry_run ? `Dry run accepted: transaction fee ${r.required_fee} µT plus the ${Number(nameFee) / 1e6} tTARI name fee. Add --live to register.`
-      : `Registered "${name}" in ${r.transaction_id} (transaction fee ${r.fee} µT, name fee ${Number(nameFee) / 1e6} tTARI locked)`);
+    report(r, r.dry_run ? `register ${name}, plus the ${Number(nameFee) / 1e6} tTARI name fee` : `registered ${name} (name fee ${Number(nameFee) / 1e6} tTARI locked)`);
   } else if (["set-messaging", "set-description", "rotate", "retire", "transfer"].includes(cmd)) {
     const name = flags.name;
     const r = await updateCard(flags, {
@@ -384,22 +300,21 @@ async function main(argv) {
       if (card.status !== "active") throw new Error(`"${name}" is retired`);
       if (cmd === "rotate") {
         const sig = ownerStatement(flags.signature, messages.rotate(directory, name, card.nonce, flags["new-agent-key"]), card.owner_key, "owner");
-        return [keyArg(flags["new-agent-key"]), sigArg(sig)];
+        return [cbor.key(flags["new-agent-key"], "--new-agent-key"), cbor.signature(sig)];
       }
-      if (cmd === "retire") return [sigArg(ownerStatement(flags.signature, messages.retire(directory, name, card.nonce), card.owner_key, "owner"))];
+      if (cmd === "retire") return [cbor.signature(ownerStatement(flags.signature, messages.retire(directory, name, card.nonce), card.owner_key, "owner"))];
       const message = messages.transfer(directory, name, card.nonce, flags["new-owner"]);
-      return [keyArg(flags["new-owner"]), sigArg(ownerStatement(flags.signature, message, card.owner_key, "current owner")),
-        sigArg(ownerStatement(flags["new-owner-signature"], message, flags["new-owner"], "new owner"))];
+      return [cbor.key(flags["new-owner"], "--new-owner"), cbor.signature(ownerStatement(flags.signature, message, card.owner_key, "current owner")),
+        cbor.signature(ownerStatement(flags["new-owner-signature"], message, flags["new-owner"], "new owner"))];
     });
-    console.log(r.dry_run ? `Dry run accepted (${cmd} ${name}): fee ${r.required_fee} µT. Add --live to send.` : `${cmd} ${name}: ${r.transaction_id} (fee ${r.fee} µT)`);
+    report(r, `${cmd} ${name}`);
   } else if (cmd === "lookup") {
     const card = await lookup(args[0]);
     console.log(card ? JSON.stringify(card, null, 2) : `"${args[0]}" is not registered`);
   } else if (cmd === "list") {
     for (const a of await listCards()) console.log(`${a.name}\t${a.status ?? "?"}\tagent ${a.agent_key?.slice(0, 12)}…\towner ${a.owner_key?.slice(0, 12)}…`);
   } else {
-    console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 27).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
-    process.exit(cmd ? 1 : 0);
+    usage(import.meta.url, cmd);
   }
 }
 

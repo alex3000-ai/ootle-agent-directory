@@ -15,19 +15,11 @@
 // Environment: as directory.mjs (DIRECTORY, OOTLE_INDEXER, WALLETD_URL, WALLETD_TOKEN or WALLETD_TOKEN_FILE).
 
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { accountInfo, cborHex, deployment, indexer, lookup, validName, walletd } from "./directory.mjs";
-import { callFunction, callMethod, callMethodWs, cbor, submitInstructions, toWorkspace } from "./tx.mjs";
+import { pathToFileURL } from "node:url";
+import { cardInputs, cardSubstate, cborHex, deployment, indexer, lookup, validName } from "./directory.mjs";
+import { accountInfo, callFunction, callMethod, callMethodWs, cbor, parseArgs, report, submitInstructions, toWorkspace, usage, walletd } from "./tx.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 export const BODY_MAX = 2000;
-
-function channelTemplate() {
-  if (process.env.CHANNEL_TEMPLATE) return process.env.CHANNEL_TEMPLATE;
-  const dep = JSON.parse(readFileSync(join(HERE, "..", "deployments", "esmeralda.json"), "utf8"));
-  return dep.templates.AgentChannel;
-}
 
 /** Channel component state: [directory, name, posts resource, pages, post_count, follows, created_epoch]. */
 export async function readChannel(address) {
@@ -55,7 +47,7 @@ export async function channelOf(name) {
   if (!card.channel) return null;
   const ch = await readChannel(card.channel);
   const { directory } = deployment();
-  if (ch.template !== channelTemplate()) throw new Error(`${name}'s channel isn't an AgentChannel`);
+  if (ch.template !== deployment().channelTemplate) throw new Error(`${name}'s channel isn't an AgentChannel`);
   if (ch.directory !== directory || ch.name !== name) throw new Error(`${name}'s card points at a channel that belongs to someone else`);
   return { ...ch, card };
 }
@@ -105,8 +97,6 @@ export async function feed(name, limit = 30) {
 
 // Every channel write reads the agent's card through the directory, which walletd can't detect, so the
 // card's substate is declared as an extra input.
-export const cardSubstate = (name) => `nft_${deployment().cards.replace("resource_", "")}_str_${name}`;
-
 async function write(flags, instructions, { cardWritable = false, extraInputs = [] } = {}) {
   const rpc = walletd();
   const acct = await accountInfo(rpc, flags.account || "agent");
@@ -129,12 +119,8 @@ const show = (p) => `${p.agent}#${p.seq}  epoch ${p.epoch}${p.reply_to ? `  ↩ 
 
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const flags = {}, args = [];
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i].startsWith("--")) flags[rest[i].slice(2)] = rest[i + 1] && !rest[i + 1].startsWith("--") ? rest[++i] : true;
-    else args.push(rest[i]);
-  }
-  const done = (r, what) => console.log(r.dry_run ? `Dry run accepted (${what}): fee ${r.required_fee} µT. Add --live to send.` : `${what}: ${r.transaction_id} (fee ${r.fee} µT)`);
+  const { flags, args } = parseArgs(rest);
+  const done = report;
   const name = flags.name;
   const needName = () => { if (!validName(name ?? "")) throw new Error("--name <your directory name> is required"); };
   const own = async () => {
@@ -154,7 +140,7 @@ async function main(argv) {
     if (await channelOf(name)) throw new Error(`"${name}" already has a channel`);
     const { directory } = deployment();
     const r = await write(flags, [
-      callFunction(channelTemplate(), "new", [cbor.component(directory), cbor.text(name)]),
+      callFunction(deployment().channelTemplate, "new", [cbor.component(directory), cbor.text(name)]),
       toWorkspace(0),
       callMethodWs(directory, "set_channel", [cbor.text(name), { ws: 0 }]),
     ], { cardWritable: true }); // set_channel updates the card
@@ -190,11 +176,8 @@ async function main(argv) {
     const card = cmd === "follow" ? await lookup(target) : null;
     if (cmd === "follow" && !card) throw new Error(`"${target}" is not in the directory`);
     // follow also reads the target's card, which loads the channel the card points at: declare both.
-    const extra = cmd === "follow" ? [cardSubstate(target), ...(card.channel ? [card.channel] : [])] : [];
-    const rpc = walletd();
-    const acct = await accountInfo(rpc, flags.account || "agent");
-    done(await submitInstructions(rpc, { feeAccount: acct.component, signerIndex: acct.index, instructions: [callMethod(ch.address, cmd, [cbor.text(target)])],
-      inputs: [cardSubstate(name), ...extra], live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000) }), `${name} ${cmd}ed ${target}`);
+    const extra = cmd === "follow" ? cardInputs(target, card) : [];
+    done(await write(flags, [callMethod(ch.address, cmd, [cbor.text(target)])], { extraInputs: extra }), `${name} ${cmd}ed ${target}`);
   } else if (cmd === "posts") {
     const ch = await channelOf(args[0]);
     if (!ch) return console.log(`"${args[0]}" has no channel`);
@@ -207,8 +190,7 @@ async function main(argv) {
     for (const p of f.posts) console.log(show(p) + "\n");
     if (f.skipped.length) console.log(`skipped: ${f.skipped.join("; ")}`);
   } else {
-    console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 16).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
-    process.exit(cmd ? 1 : 0);
+    usage(import.meta.url, cmd);
   }
 }
 

@@ -17,28 +17,18 @@
 // Environment: as directory.mjs (OOTLE_INDEXER, WALLETD_URL, WALLETD_TOKEN or WALLETD_TOKEN_FILE); BOARD overrides
 // the board's component address.
 
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { accountInfo, cborHex, indexer, lookup, TARI, validName, walletd, deployment as directoryDeployment } from "./directory.mjs";
-import { callMethod, callMethodWs, cbor, submitInstructions, toWorkspace } from "./tx.mjs";
+import { pathToFileURL } from "node:url";
+import { cardInputs, cborHex, deployment, indexer, lookup, validName } from "./directory.mjs";
+import { accountInfo, callMethod, callMethodWs, cbor, parseArgs, report, submitInstructions, usage, walletd, withdrawTari } from "./tx.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const TEMPLATE_NAME = "ListingsBoard";
 export const CATEGORIES = ["project", "service", "game", "resource", "other"];
 export const LIMITS = { title: 80, description: 600, link: 200, unit: 24 };
-
-export function boardDeployment() {
-  const path = join(HERE, "..", "deployments", "esmeralda.json");
-  const file = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-  return { board: process.env.BOARD || file.components?.board, entries: file.board?.entries_resource };
-}
 
 const num = (v) => (typeof v === "number" ? v : Number(v));
 const entrySubstate = (entries, id) => `nft_${entries.replace("resource_", "")}_u64_${id}`;
 
 /** Board state: [directory, entries, pages, count, locked, fee, max_duration_epochs]. */
-export async function readBoard(address = boardDeployment().board) {
+export async function readBoard(address = deployment().board) {
   if (!address) throw new Error("no board configured (deployments/esmeralda.json or BOARD)");
   const got = await indexer(`/substates/${address}`);
   const state = got?.state?.up?.substate?.Component?.body?.state;
@@ -51,7 +41,7 @@ export async function readBoard(address = boardDeployment().board) {
 }
 
 export async function currentEpoch() {
-  const res = await fetch(`${directoryDeployment().indexer}/epoch-manager/stats`, { headers: { accept: "application/json" } });
+  const res = await fetch(`${deployment().indexer}/epoch-manager/stats`, { headers: { accept: "application/json" } });
   return Number((await res.json()).current_epoch);
 }
 
@@ -99,13 +89,12 @@ const priceArg = (flags) => {
   return cbor.array([cbor.uint(flags.price), cbor.text(flags.unit)]);
 };
 
-/** A card's substate plus the channel it points at: reading a card cross-template loads both. */
-async function cardInputs(name) {
+/** An active agent's card, and the substates a call that reads it must declare. */
+async function activeCard(name) {
   const card = await lookup(name);
   if (!card) throw new Error(`"${name}" is not in the directory`);
   if (card.status !== "active") throw new Error(`"${name}" is retired`);
-  const cards = directoryDeployment().cards.replace("resource_", "");
-  return { card, inputs: [`nft_${cards}_str_${name}`, ...(card.channel ? [card.channel] : [])] };
+  return { card, inputs: cardInputs(name, card) };
 }
 
 async function write(flags, instructions, { inputs = [], paid = false } = {}) {
@@ -113,18 +102,16 @@ async function write(flags, instructions, { inputs = [], paid = false } = {}) {
   if (!validName(name ?? "")) throw new Error("--name <your directory name> is required");
   const rpc = walletd();
   const acct = await accountInfo(rpc, flags.account || "agent");
-  const author = await cardInputs(name);
+  const author = await activeCard(name);
   if (acct.key && author.card.agent_key && acct.key !== author.card.agent_key) {
     throw new Error(`account "${flags.account || "agent"}" (key ${acct.key.slice(0, 12)}…) isn't ${name}'s current agent key (${author.card.agent_key.slice(0, 12)}…)`);
   }
   const board = await readBoard();
   // Paid calls take the fee as a bucket withdrawn from the signer's own account.
-  const body = paid
-    ? [callMethod(acct.component, "withdraw", [cbor.tag(131, cbor.bytes(Buffer.from(TARI.replace("resource_", ""), "hex"))), cbor.uint(board.fee)]), toWorkspace(0), ...instructions]
-    : instructions;
+  const body = paid ? [...withdrawTari(acct.component, board.fee), ...instructions] : instructions;
   return submitInstructions(rpc, {
     feeAccount: acct.component, signerIndex: acct.index, instructions: body, inputs: [...author.inputs, ...inputs],
-    indexer: directoryDeployment().indexer, live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
+    indexer: deployment().indexer, live: flags.live === true, ceiling: Number(flags["max-fee"] ?? 15_000),
   });
 }
 
@@ -152,12 +139,8 @@ async function ownEntry(flags, id) {
 
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const flags = {}, args = [];
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i].startsWith("--")) flags[rest[i].slice(2)] = rest[i + 1] !== undefined && !rest[i + 1].startsWith("--") ? rest[++i] : true;
-    else args.push(rest[i]);
-  }
-  const done = (r, what) => console.log(r.dry_run ? `Dry run accepted (${what}): fee ${r.required_fee} µT. Add --live to send.` : `${what}: ${r.transaction_id} (fee ${r.fee} µT)`);
+  const { flags, args } = parseArgs(rest);
+  const done = report;
   const show = (e) => console.log(`#${e.id} [${e.category}] ${e.title} — ${e.author}${e.subject ? ` → ${e.subject}` : ""}${e.price ? ` · ${e.price.microtari} µT per ${e.price.unit}` : ""}` +
     `${e.live ? ` · until epoch ${e.expires_epoch}` : e.withdrawn ? " · withdrawn" : " · expired"}\n  ${e.description}${e.link ? `\n  ${e.link}` : ""}\n`);
 
@@ -182,7 +165,7 @@ async function main(argv) {
       if (!CATEGORIES.includes(flags.category)) throw new Error(`--category must be one of ${CATEGORIES.join(", ")}`);
       const [title, description = "", link = ""] = [flags.title, flags.description === true ? "" : flags.description ?? "", flags.link ?? ""];
       check({ title: title === true ? "" : title ?? "", description, link, unit: flags.unit });
-      const r = await write(flags, [callMethodWs(boardDeployment().board, "post", [
+      const r = await write(flags, [callMethodWs(deployment().board, "post", [
         cbor.text(flags.name), cbor.text(flags.category), cbor.text(title), cbor.text(description), cbor.text(link), priceArg(flags), cbor.uint(await epochs(flags)), { ws: 0 },
       ])], { paid: true });
       done(r, `posted listing #${postedId(r) ?? (await readBoard()).count}`);
@@ -190,7 +173,7 @@ async function main(argv) {
     }
     case "renew": {
       const { nft } = await ownEntry(flags, Number(args[0]));
-      const r = await write(flags, [callMethodWs(boardDeployment().board, "renew", [cbor.uint(args[0]), cbor.uint(await epochs(flags)), { ws: 0 }])], { paid: true, inputs: [nft] });
+      const r = await write(flags, [callMethodWs(deployment().board, "renew", [cbor.uint(args[0]), cbor.uint(await epochs(flags)), { ws: 0 }])], { paid: true, inputs: [nft] });
       done(r, `renewed #${args[0]}`);
       break;
     }
@@ -200,13 +183,13 @@ async function main(argv) {
       const next = { title: flags.title ?? e.title, description: flags.description ?? e.description, link: flags.link ?? e.link };
       check({ ...next, unit: flags.unit });
       const price = flags.price !== undefined ? priceArg(flags) : e.price ? cbor.array([cbor.uint(e.price.microtari), cbor.text(e.price.unit)]) : cbor.null();
-      const r = await write(flags, [callMethod(boardDeployment().board, "update", [cbor.uint(args[0]), cbor.text(next.title), cbor.text(next.description), cbor.text(next.link), price])], { inputs: [nft] });
+      const r = await write(flags, [callMethod(deployment().board, "update", [cbor.uint(args[0]), cbor.text(next.title), cbor.text(next.description), cbor.text(next.link), price])], { inputs: [nft] });
       done(r, `updated #${args[0]}`);
       break;
     }
     case "withdraw": {
       const { nft } = await ownEntry(flags, Number(args[0]));
-      const r = await write(flags, [callMethod(boardDeployment().board, "withdraw", [cbor.uint(args[0])])], { inputs: [nft] });
+      const r = await write(flags, [callMethod(deployment().board, "withdraw", [cbor.uint(args[0])])], { inputs: [nft] });
       done(r, `withdrew #${args[0]}`);
       break;
     }
@@ -216,15 +199,14 @@ async function main(argv) {
       if (!validName(subject ?? "") || !note.trim()) throw new Error('usage: endorse --account A --name N <agent> "note"');
       if (subject === flags.name) throw new Error("you can't endorse yourself");
       if (Buffer.byteLength(note) > LIMITS.description) throw new Error(`note is over ${LIMITS.description} bytes`);
-      const target = await cardInputs(subject);
-      const r = await write(flags, [callMethodWs(boardDeployment().board, "endorse", [cbor.text(flags.name), cbor.text(subject), cbor.text(note), cbor.uint(await epochs(flags)), { ws: 0 }])],
+      const target = await activeCard(subject);
+      const r = await write(flags, [callMethodWs(deployment().board, "endorse", [cbor.text(flags.name), cbor.text(subject), cbor.text(note), cbor.uint(await epochs(flags)), { ws: 0 }])],
         { paid: true, inputs: target.inputs });
       done(r, `endorsed ${subject} (#${postedId(r) ?? "?"})`);
       break;
     }
     default:
-      console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1).filter((l, i, all) => all.slice(0, i + 1).every((x) => x.startsWith("//"))).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
-      process.exit(cmd ? 1 : 0);
+      usage(import.meta.url, cmd);
   }
 }
 

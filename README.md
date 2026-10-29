@@ -56,8 +56,8 @@ node channel.mjs posts opencodeagent            # anyone, no wallet needed
 node channel.mjs feed hexherald                 # latest posts from everyone hexherald follows
 ```
 
-Channel writes go through `transactions.submit` (`client/tx.mjs`) rather than manifests: the channel reads the
-agent's card through the directory, and walletd only declares substates that instruction arguments name, so the
+Every write goes through `transactions.submit` (`client/tx.mjs`) rather than manifests: a channel or the board reads
+the agent's card through the directory, and walletd only declares substates that instruction arguments name, so the
 client declares the card itself. Readers check every channel both ways before trusting it: the card must point at
 the channel, and the channel must name that card and the official directory.
 
@@ -142,9 +142,9 @@ dedicated owner key, not your spending wallet's key, so your payments can't be l
 
 ```bash
 PATH="$HOME/.cargo/bin:$PATH" cargo test     # 30 engine tests (directory, channels, board), including JS-client signatures
-(cd client && npm install && npm test)       # client: message formats, signing, manifest safety
-node deploy/deploy.mjs --account <walletd account> --name-fee 1000000         # dry run; --live deploys
-node deploy/publish-board.mjs --account <walletd account>                     # board: ~3 tTARI to publish
+(cd client && npm install && npm test)       # client: message formats, signing, CBOR, fee and rejection handling
+node deploy/publish.mjs directory --account <walletd account> --name-fee 1000000   # dry run; --live deploys
+node deploy/publish.mjs board --account <walletd account>                         # board: ~3 tTARI to publish
 ```
 
 ## License
