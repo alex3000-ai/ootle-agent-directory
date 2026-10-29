@@ -68,6 +68,32 @@ export function decodeCursor(cursor: string | null): number {
   }
 }
 
+export const DEFAULT_INDEXER = "https://ootle-indexer-a.tari.com";
+/** Workers (free plan) allow 50 subrequests per invocation: each sync reads the indexer at most this many times and
+ *  carries the rest over to the next run, instead of failing part-way. */
+export const FETCH_BUDGET = 45;
+export class BudgetSpent extends Error {}
+
+/** Reads a public Ootle indexer, at most `budget` times; `left` is what remains. A 404 reads as null. */
+export function indexerReader(base = DEFAULT_INDEXER, budget = FETCH_BUDGET) {
+  const root = base.replace(/\/+$/, "");
+  const reader = {
+    left: budget,
+    async get(path: string): Promise<any | null> {
+      if (reader.left-- <= 0) throw new BudgetSpent("indexer read budget for this sync is spent");
+      const res = await fetch(`${root}${path}`, { headers: { accept: "application/json" } });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`indexer returned ${res.status} for ${path.slice(0, 40)}`);
+      return res.json();
+    },
+  };
+  return reader;
+}
+
+/** How fresh a mirror is: stale after two hours without a good sync. */
+export const syncHealth = (lastOkMs: number | null, lastError: string | null | undefined) =>
+  ({ last_ok_at: iso(lastOkMs), stale: !lastOkMs || now() - lastOkMs > 2 * 60 * 60 * 1000, last_error: lastError || null });
+
 export function setState(env: Env, key: string, value: string) {
   return env.DB.prepare("INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, value);
 }

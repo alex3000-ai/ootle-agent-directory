@@ -3,7 +3,7 @@
 // shows each agent's work history: what other agents actually paid it. Ootlebook never holds keys or funds.
 
 import { DIRECTORY } from "./directory";
-import { cborHex, Ctx, Env, getState, iso, json, mapEntries, now, requireSyncToken, Route, setState, tari } from "./util";
+import { cborHex, Ctx, DEFAULT_INDEXER, Env, getState, indexerReader, iso, json, mapEntries, now, requireSyncToken, Route, setState, tari } from "./util";
 
 export const LANE_VOUCHER_DOMAIN = "ootle-agent-lane-voucher-v1";
 
@@ -19,21 +19,10 @@ const DEPLOYMENT = {
   client: "https://github.com/alex3000-ai/ootle-agent-lanes/blob/main/client/lanes.mjs",
 };
 const ROTATE = 3;          // lanes re-read each sync whatever the events say (indexers may prune events)
-// The lanes sync has its own cron invocation; Workers (free plan) allow 50 subrequests per invocation.
-const FETCH_BUDGET = 45;
 const TOPICS = ["lane_funded", "lane_claimed", "close_requested", "lane_released", "lane_refunded"].map((t) => `LaneLedger.lanes.${t}`);
 
 const ledger = (env: Env) => env.LANES_LEDGER || DEPLOYMENT.ledger;
-const indexerBase = (env: Env) => (env.LANES_INDEXER_URL || "https://ootle-indexer-a.tari.com").replace(/\/+$/, "");
-
-let fetchesLeft = FETCH_BUDGET;
-async function get(env: Env, path: string): Promise<any | null> {
-  if (fetchesLeft-- <= 0) throw new Error("indexer read budget for this sync is spent");
-  const res = await fetch(`${indexerBase(env)}${path}`, { headers: { accept: "application/json" } });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`indexer returned ${res.status} for ${path.slice(0, 40)}`);
-  return res.json();
-}
+let ix = indexerReader();
 
 interface Lane {
   lane_id: number; buyer: string; provider: string; provider_key: string; deposited: number; claimed: number; refunded: number;
@@ -57,7 +46,7 @@ const upsert = (env: Env, at: string, l: Lane, t: number) => env.DB.prepare(`INS
 
 /** v0.2 (frozen): one read of the whole ledger, [directory, lane_close_epochs, vault, balances, lanes, next_lane_id, listings]. */
 async function syncV02(env: Env, t: number): Promise<D1PreparedStatement[]> {
-  const state = (await get(env, `/substates/${DEPLOYMENT.v0_2.ledger}`))?.state?.up?.substate?.Component?.body?.state;
+  const state = (await ix.get(`/substates/${DEPLOYMENT.v0_2.ledger}`))?.state?.up?.substate?.Component?.body?.state;
   if (!Array.isArray(state) || state.length !== 7) throw new Error("the v0.2 ledger has an unexpected shape");
   return mapEntries(state[4]).map(([k, l]: [unknown, any]) => upsert(env, DEPLOYMENT.v0_2.ledger, {
     lane_id: num(k), buyer: hex(l[0]), provider: String(l[1]), provider_key: hex(l[2]), deposited: num(l[3]), claimed: num(l[4]), refunded: 0,
@@ -70,10 +59,10 @@ export interface LanesSyncResult { status: "ok" | "error"; lanes: number; read: 
 /** v0.3: new lanes by the ledger's count, lanes with new events, and a few in rotation; then the frozen v0.2 ledger. */
 export async function syncLanes(env: Env): Promise<LanesSyncResult> {
   const t = now();
-  fetchesLeft = FETCH_BUDGET;
+  ix = indexerReader(env.LANES_INDEXER_URL || undefined);
   const at = ledger(env);
   try {
-    const comp = (await get(env, `/substates/${at}`))?.state?.up?.substate?.Component;
+    const comp = (await ix.get(`/substates/${at}`))?.state?.up?.substate?.Component;
     const state = comp?.body?.state;
     // Only the official ledger: the LaneLedger v0.3 template, over the official directory.
     if (!comp || !Array.isArray(state) || state.length !== 6 || (!env.LANES_LEDGER && `template_${comp.header?.template_address}` !== DEPLOYMENT.template)) throw new Error("not the LaneLedger v0.3 component");
@@ -81,7 +70,7 @@ export async function syncLanes(env: Env): Promise<LanesSyncResult> {
     if (`component_${hex(dir)}` !== DIRECTORY.directory) throw new Error("the ledger reads another directory");
     const lanesHex = hex(lanesRes);
 
-    const events = await Promise.all(TOPICS.map(async (topic) => ((await get(env, `/transactions/events?topic=${topic}&substate_id=${at}&limit=1000`))?.events ?? []) as Array<[string, { substate_id?: string; payload?: Record<string, string> }]>));
+    const events = await Promise.all(TOPICS.map(async (topic) => ((await ix.get(`/transactions/events?topic=${topic}&substate_id=${at}&limit=1000`))?.events ?? []) as Array<[string, { substate_id?: string; payload?: Record<string, string> }]>));
     const counts: Record<string, number> = {};
     for (const list of events) for (const [, e] of list) if (e?.substate_id === at && /^\d+$/.test(e.payload?.lane_id ?? "")) counts[e.payload!.lane_id] = (counts[e.payload!.lane_id] ?? 0) + 1;
     const seen = JSON.parse((await getState(env, "lanes_event_counts")) ?? "{}") as Record<string, number>;
@@ -98,8 +87,8 @@ export async function syncLanes(env: Env): Promise<LanesSyncResult> {
     const stmts = await syncV02(env, t);
     const done = new Set<number>();
     for (const id of todo) {
-      if (fetchesLeft <= 0) break;
-      const nft = (await get(env, `/substates/nft_${lanesHex}_u64_${id}`))?.state?.up?.substate?.NonFungible;
+      if (ix.left <= 0) break;
+      const nft = (await ix.get(`/substates/nft_${lanesHex}_u64_${id}`))?.state?.up?.substate?.NonFungible;
       if (!nft) continue;
       // LaneInfo [id, buyer, provider, provider_key, voucher_key, opened_epoch]; LaneState [deposited, claimed, refunded, close_requested_epoch, closed].
       const [, buyer, provider, providerKey] = nft.data as any[];
@@ -170,7 +159,7 @@ async function getLanesConfig(ctx: Ctx) {
         signer: "/lane-voucher.mjs",
       },
       frozen: { v0_2: { ...DEPLOYMENT.v0_2, note: "no new lanes; funds can still be withdrawn (legacy/ in the lanes repo)" } },
-      indexer: indexerBase(ctx.env), last_sync_at: last ? iso(Number(last)) : null, last_error: (await getState(ctx.env, "lanes_last_error")) || null,
+      indexer: ctx.env.LANES_INDEXER_URL || DEFAULT_INDEXER, last_sync_at: last ? iso(Number(last)) : null, last_error: (await getState(ctx.env, "lanes_last_error")) || null,
     },
   });
 }

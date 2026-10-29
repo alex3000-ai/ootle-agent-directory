@@ -1,7 +1,7 @@
 // Community projects, mirrored (with attribution) from the Ootle Lobby's public content repo. Ootlebook adds
 // nothing of its own: each listing links back to its source file and to the Lobby, where corrections go.
 
-import { clampInt, Ctx, decodeCursor, encodeCursor, Env, HttpError, iso, json, now, requireSyncToken, Route } from "./util";
+import { clampInt, Ctx, decodeCursor, encodeCursor, Env, getState, HttpError, iso, json, now, requireSyncToken, Route, setState } from "./util";
 
 export const LOBBY_REPO = "marguerite347/ootle-lobby-community";
 const BRANCH = "main";
@@ -16,9 +16,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   "contest-entry": "Contest entry",
 };
 
-// ---------------------------------------------------------------------------------------------
-// Sync from the Lobby repo
-// ---------------------------------------------------------------------------------------------
+// ---- Sync from the Lobby repo ----
 
 interface TreeEntry { path: string; sha: string }
 
@@ -88,15 +86,6 @@ function normalize(data: Record<string, any>, path: string, category: string) {
   };
 }
 
-async function state(env: Env, key: string): Promise<string | null> {
-  const r = await env.DB.prepare("SELECT value FROM sync_state WHERE key = ?").bind(key).first<{ value: string }>();
-  return r?.value ?? null;
-}
-
-function setState(env: Env, key: string, value: string) {
-  return env.DB.prepare("INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, value);
-}
-
 export function lobbyUrl(category: string, contest: string | null): string {
   if (category === "contest-entry" && contest) return `${LOBBY_URL}/challenges/${contest}`;
   if (category === "community") return `${LOBBY_URL}/#creator-community`;
@@ -106,14 +95,14 @@ export function lobbyUrl(category: string, contest: string | null): string {
 export interface SyncResult { status: string; changed: number; fetched: number; added: number; updated: number; removed: number; pending: number; error?: string }
 
 /** Pulls changed listing files from GitHub. Safe to run repeatedly; resumes where it left off. */
-export async function syncProjects(env: Env & { GITHUB_TOKEN?: string }): Promise<SyncResult> {
+export async function syncProjects(env: Env): Promise<SyncResult> {
   const result: SyncResult = { status: "ok", changed: 0, fetched: 0, added: 0, updated: 0, removed: 0, pending: 0 };
   const headers: Record<string, string> = { "user-agent": "Ootlebook-sync (+https://github.com/" + LOBBY_REPO + ")", accept: "application/vnd.github+json" };
   if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
-  const etag = await state(env, "tree_etag");
+  const etag = await getState(env, "tree_etag");
   if (etag) headers["if-none-match"] = etag;
   const t = now();
-  let pending: TreeEntry[] = JSON.parse((await state(env, "pending")) ?? "[]");
+  let pending: TreeEntry[] = JSON.parse((await getState(env, "pending")) ?? "[]");
 
   try {
     const res = await fetch(`https://api.github.com/repos/${LOBBY_REPO}/git/trees/${BRANCH}?recursive=1`, { headers });
@@ -193,12 +182,12 @@ async function upsertProject(env: Env, data: Record<string, any>, entry: TreeEnt
 
 async function syncStatus(ctx: Ctx) {
   const counts = await ctx.env.DB.prepare("SELECT category, COUNT(*) AS n FROM projects WHERE removed = 0 GROUP BY category").all<{ category: string; n: number }>();
-  const last = await state(ctx.env, "last_sync_at");
+  const last = await getState(ctx.env, "last_sync_at");
   return json({
     source: { repository: `https://github.com/${LOBBY_REPO}`, human_site: LOBBY_URL },
     last_sync_at: last ? iso(Number(last)) : null,
-    last_error: (await state(ctx.env, "last_error")) || null,
-    pending_files: JSON.parse((await state(ctx.env, "pending")) ?? "[]").length,
+    last_error: (await getState(ctx.env, "last_error")) || null,
+    pending_files: JSON.parse((await getState(ctx.env, "pending")) ?? "[]").length,
     projects: Object.fromEntries(counts.results.map((c) => [c.category, c.n])),
   });
 }
@@ -208,9 +197,7 @@ async function manualSync(ctx: Ctx) {
   return json({ result: await syncProjects(ctx.env) });
 }
 
-// ---------------------------------------------------------------------------------------------
-// Serializers & helpers
-// ---------------------------------------------------------------------------------------------
+// ---- Serializers & helpers ----
 
 async function getProjectRow(env: Env, slug: string): Promise<Record<string, any>> {
   const p = await env.DB.prepare("SELECT * FROM projects WHERE slug = ? AND removed = 0").bind(slug).first<Record<string, any>>();
@@ -256,9 +243,7 @@ function projectOut(p: Record<string, any>, origin: string, full = false) {
   };
 }
 
-// ---------------------------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------------------------
+// ---- Handlers ----
 
 async function listProjects(ctx: Ctx) {
   const sp = ctx.url.searchParams;

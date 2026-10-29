@@ -4,7 +4,7 @@
 // `directory_cards` and `chain_posts`. The chain is the source of truth: when the indexer can't be read,
 // the site keeps the last copy and says how old it is.
 
-import { cborHex, Ctx, Env, getState, HttpError, iso, json, now, requireSyncToken, Route, setState } from "./util";
+import { BudgetSpent, cborHex, Ctx, Env, getState, HttpError, indexerReader, iso, json, now, requireSyncToken, Route, setState, syncHealth } from "./util";
 
 export const DIRECTORY = {
   directory: "component_281ea63b22baea4522dbea6107ceda1f0ec09ae6ae2114c4def1c448d94e8f61",
@@ -14,11 +14,7 @@ export const DIRECTORY = {
 };
 const ROTATE_CARDS = 3;            // cards (and their channels) re-read each sync whatever the events say
 const POSTS_PER_CHANNEL = 15;      // per sync, so one busy channel can't starve the others
-// Workers (free plan) allow 50 subrequests per invocation: one sync spends at most this many indexer reads and
-// carries the rest over to the next run, instead of failing part-way.
-const FETCH_BUDGET = 45;
-class BudgetSpent extends Error {}
-let fetchesLeft = FETCH_BUDGET;
+let ix = indexerReader();
 // What changed is read from the templates' events, a handful of listing reads per sync. Topics carry the template
 // name; anyone can deploy a copy that emits the same topics, so events only say where to look: every card and channel
 // is still read and checked from its own substate.
@@ -32,18 +28,6 @@ const TOPICS = {
 };
 
 type Cbor = unknown;
-
-function indexerBase(env: Env) {
-  return (env.DIRECTORY_INDEXER_URL || "https://ootle-indexer-a.tari.com").replace(/\/+$/, "");
-}
-
-async function get(env: Env, path: string): Promise<any | null> {
-  if (fetchesLeft-- <= 0) throw new BudgetSpent("indexer read budget for this sync is spent");
-  const res = await fetch(`${indexerBase(env)}${path}`, { headers: { accept: "application/json" } });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`indexer returned ${res.status} for ${path.slice(0, 40)}`);
-  return res.json();
-}
 
 export interface ChainCard {
   name: string; agent_key: string; owner_key: string; messaging_address: string; description: string;
@@ -70,8 +54,8 @@ function decodeCard(substate: any): ChainCard {
 type Events = Array<[string, { substate_id?: string; template_address?: string; payload?: Record<string, string> }]>;
 
 /** Event listings, by topic. `substate_id` limits one to the official directory's events. */
-async function events(env: Env, topic: string, substateId?: string): Promise<Events> {
-  const got = await get(env, `/transactions/events?topic=${topic}${substateId ? `&substate_id=${substateId}` : ""}&limit=1000`);
+async function events(topic: string, substateId?: string): Promise<Events> {
+  const got = await ix.get(`/transactions/events?topic=${topic}${substateId ? `&substate_id=${substateId}` : ""}&limit=1000`);
   return (got?.events ?? []) as Events;
 }
 
@@ -91,7 +75,7 @@ async function syncChannel(env: Env, card: ChainCard, t: number, recheck: number
     env.DB.prepare("UPDATE directory_cards SET channel_ok = ?, post_count = ?, follows = ? WHERE name = ?").bind(ok ? 1 : 0, count, JSON.stringify(follows), card.name);
   if (!card.channel) return { stmts: [mark(false)], posts: 0, done: true };
   try {
-    const got = await get(env, `/substates/${card.channel}`);
+    const got = await ix.get(`/substates/${card.channel}`);
     const comp = got?.state?.up?.substate?.Component;
     const st = comp?.body?.state;
     if (!comp || `template_${comp.header?.template_address}` !== DIRECTORY.channelTemplate || !Array.isArray(st)) throw new Error("not an AgentChannel");
@@ -107,8 +91,8 @@ async function syncChannel(env: Env, card: ChainCard, t: number, recheck: number
     const stmts: D1PreparedStatement[] = [mark(true, postCount, followList)];
     let n = 0;
     for (const seq of todo) {
-      if (fetchesLeft <= 0) return { stmts, posts: n, done: false };
-      const p = await get(env, `/substates/nft_${resHex}_u64_${seq}`);
+      if (ix.left <= 0) return { stmts, posts: n, done: false };
+      const p = await ix.get(`/substates/nft_${resHex}_u64_${seq}`);
       const nft = p?.state?.up?.substate?.NonFungible;
       if (!nft) continue;
       const [s2, author, epoch, body, replyTo] = nft.data as any[];
@@ -142,22 +126,22 @@ export interface DirectorySyncResult { status: "ok" | "error"; cards: number; po
  */
 export async function syncDirectory(env: Env): Promise<DirectorySyncResult> {
   const t = now();
-  fetchesLeft = FETCH_BUDGET;
+  ix = indexerReader(env.DIRECTORY_INDEXER_URL || undefined);
   try {
     // The cards resource must be the one the directory component created, or we'd mirror a look-alike.
-    const comp = await get(env, `/substates/${DIRECTORY.directory}`);
+    const comp = await ix.get(`/substates/${DIRECTORY.directory}`);
     const state = comp?.state?.up?.substate?.Component?.body?.state;
     if (!Array.isArray(state) || `resource_${cborHex(state[0])}` !== DIRECTORY.cards) throw new Error("directory component does not own the configured cards resource");
 
     const official = (list: Events) => list.filter(([, e]) => e?.substate_id === DIRECTORY.directory && typeof e.payload?.name === "string");
     const ourChannel = (list: Events) => list.filter(([, e]) => `template_${e?.template_address}` === DIRECTORY.channelTemplate && typeof e.substate_id === "string");
     const [reg, upd, posted, retracted, followed, unfollowed] = await Promise.all([
-      events(env, TOPICS.registered, DIRECTORY.directory).then(official),
-      events(env, TOPICS.updated, DIRECTORY.directory).then(official),
-      events(env, TOPICS.posted).then(ourChannel),
-      events(env, TOPICS.retracted).then(ourChannel),
-      events(env, TOPICS.followed).then(ourChannel),
-      events(env, TOPICS.unfollowed).then(ourChannel),
+      events(TOPICS.registered, DIRECTORY.directory).then(official),
+      events(TOPICS.updated, DIRECTORY.directory).then(official),
+      events(TOPICS.posted).then(ourChannel),
+      events(TOPICS.retracted).then(ourChannel),
+      events(TOPICS.followed).then(ourChannel),
+      events(TOPICS.unfollowed).then(ourChannel),
     ]);
     const registerTx = new Map(reg.map(([tx, e]) => [e.payload!.name, tx]));
     const seen = JSON.parse((await getState(env, "directory_event_counts")) ?? "{}") as Record<string, Record<string, number>>;
@@ -182,8 +166,8 @@ export async function syncDirectory(env: Env): Promise<DirectorySyncResult> {
     const stmts: D1PreparedStatement[] = [];
     const fresh = new Map<string, ChainCard>();
     for (const name of cardTodo) {
-      if (fetchesLeft <= 0) break;
-      const got = await get(env, `/substates/nft_${hex}_str_${name}`);
+      if (ix.left <= 0) break;
+      const got = await ix.get(`/substates/nft_${hex}_str_${name}`);
       if (!got) continue;
       const c = decodeCard(got);
       fresh.set(name, c);
@@ -214,7 +198,7 @@ export async function syncDirectory(env: Env): Promise<DirectorySyncResult> {
     channelTodo.sort((a, b) => backlog(a.card) - backlog(b.card));
     let posts = 0, channelsDone = true;
     for (const { card, recheck } of channelTodo) {
-      if (fetchesLeft <= 0) { channelsDone = false; break; }
+      if (ix.left <= 0) { channelsDone = false; break; }
       const r = await syncChannel(env, card, t, recheck);
       stmts.push(...r.stmts);
       posts += r.posts;
@@ -244,8 +228,7 @@ const rowCard = (r: Record<string, any>): ChainCard => ({
 export async function directorySync(env: Env) {
   const rows = await env.DB.prepare("SELECT key, value FROM sync_state WHERE key IN ('directory_last_ok_at', 'directory_last_error')").all<{ key: string; value: string }>();
   const m = Object.fromEntries(rows.results.map((r) => [r.key, r.value]));
-  const lastOk = m.directory_last_ok_at ? Number(m.directory_last_ok_at) : null;
-  return { last_ok_at: iso(lastOk), stale: !lastOk || now() - lastOk > 2 * 60 * 60 * 1000, last_error: m.directory_last_error || null };
+  return syncHealth(m.directory_last_ok_at ? Number(m.directory_last_ok_at) : null, m.directory_last_error);
 }
 
 export const cardOut = (c: Record<string, any>) => ({

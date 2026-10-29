@@ -3,7 +3,7 @@
 // resources, and endorsements of other agents. The cron copies the entries from the public indexer into
 // `board_entries`; the chain is the source of truth.
 
-import { cborHex, clampInt, Ctx, decodeCursor, encodeCursor, Env, getState, HttpError, iso, json, now, requireSyncToken, Route, setState, tari } from "./util";
+import { cborHex, clampInt, Ctx, decodeCursor, encodeCursor, Env, getState, HttpError, indexerReader, iso, json, now, requireSyncToken, Route, setState, syncHealth, tari } from "./util";
 import { DIRECTORY } from "./directory";
 
 export const BOARD = {
@@ -16,21 +16,10 @@ export const BOARD = {
 };
 export const CATEGORIES = ["project", "service", "game", "resource", "other", "endorsement"];
 const ROTATE = 3;           // entries re-read each sync whatever the events say (indexers may prune events)
-// Each sync runs in its own cron invocation; Workers (free plan) allow 50 subrequests per invocation.
-const FETCH_BUDGET = 45;
 const TOPICS = { renewed: "ListingsBoard.board.renewed", updated: "ListingsBoard.board.updated", withdrawn: "ListingsBoard.board.withdrawn" };
 
 const board = (env: Env) => env.BOARD || BOARD.board;
-const indexerBase = (env: Env) => (env.BOARD_INDEXER_URL || env.DIRECTORY_INDEXER_URL || "https://ootle-indexer-a.tari.com").replace(/\/+$/, "");
-
-let fetchesLeft = FETCH_BUDGET;
-async function get(env: Env, path: string): Promise<any | null> {
-  if (fetchesLeft-- <= 0) throw new Error("indexer read budget for this sync is spent");
-  const res = await fetch(`${indexerBase(env)}${path}`, { headers: { accept: "application/json" } });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`indexer returned ${res.status} for ${path.slice(0, 40)}`);
-  return res.json();
-}
+let ix = indexerReader();
 
 type Events = Array<[string, { substate_id?: string; payload?: Record<string, string> }]>;
 
@@ -39,21 +28,21 @@ export interface BoardSyncResult { status: "ok" | "error"; entries: number; read
 /** Reads new entries (by the board's count), entries with new renew/update/withdraw events, and a few in rotation. */
 export async function syncBoard(env: Env): Promise<BoardSyncResult> {
   const t = now();
-  fetchesLeft = FETCH_BUDGET;
+  ix = indexerReader(env.BOARD_INDEXER_URL || env.DIRECTORY_INDEXER_URL || undefined);
   try {
-    const comp = (await get(env, `/substates/${board(env)}`))?.state?.up?.substate?.Component;
+    const comp = (await ix.get(`/substates/${board(env)}`))?.state?.up?.substate?.Component;
     const state = comp?.body?.state;
     // Only the official board: the ListingsBoard template, over the official directory, with its own entries resource.
     if (!comp || !Array.isArray(state) || (!env.BOARD && `template_${comp.header?.template_address}` !== BOARD.template)) throw new Error("not the ListingsBoard component");
     const [dir, entriesRes, , count, , fee, maxEpochs] = state;
     if (`component_${cborHex(dir)}` !== DIRECTORY.directory) throw new Error("the board reads another directory");
     const entries = `resource_${cborHex(entriesRes)}`;
-    const stats = await get(env, "/epoch-manager/stats");
+    const stats = await ix.get("/epoch-manager/stats");
     const epoch = Number(stats?.current_epoch);
     if (!Number.isFinite(epoch)) throw new Error("could not read the current epoch");
 
     const ofBoard = (list: Events) => list.filter(([, e]) => e?.substate_id === board(env) && /^\d+$/.test(e.payload?.id ?? ""));
-    const lists = await Promise.all(Object.values(TOPICS).map(async (topic) => ofBoard(((await get(env, `/transactions/events?topic=${topic}&substate_id=${board(env)}&limit=1000`))?.events ?? []) as Events)));
+    const lists = await Promise.all(Object.values(TOPICS).map(async (topic) => ofBoard(((await ix.get(`/transactions/events?topic=${topic}&substate_id=${board(env)}&limit=1000`))?.events ?? []) as Events)));
     const counts: Record<string, number> = {};
     for (const list of lists) for (const [, e] of list) counts[e.payload!.id] = (counts[e.payload!.id] ?? 0) + 1;
     const seen = JSON.parse((await getState(env, "board_event_counts")) ?? "{}") as Record<string, number>;
@@ -70,8 +59,8 @@ export async function syncBoard(env: Env): Promise<BoardSyncResult> {
     const stmts: D1PreparedStatement[] = [];
     const done = new Set<number>();
     for (const id of todo) {
-      if (fetchesLeft <= 0) break;
-      const nft = (await get(env, `/substates/nft_${hex}_u64_${id}`))?.state?.up?.substate?.NonFungible;
+      if (ix.left <= 0) break;
+      const nft = (await ix.get(`/substates/nft_${hex}_u64_${id}`))?.state?.up?.substate?.NonFungible;
       if (!nft) continue;
       const [, author, category, subject, created] = nft.data as any[];
       const [title, description, link, price, expires, withdrawn, updated] = nft.mutable_data as any[];
@@ -108,11 +97,10 @@ export async function syncBoard(env: Env): Promise<BoardSyncResult> {
 export async function boardSync(env: Env) {
   const rows = await env.DB.prepare("SELECT key, value FROM sync_state WHERE key IN ('board_last_ok_at', 'board_last_error', 'board_epoch', 'board_config')").all<{ key: string; value: string }>();
   const m = Object.fromEntries(rows.results.map((r) => [r.key, r.value]));
-  const lastOk = m.board_last_ok_at ? Number(m.board_last_ok_at) : null;
   return {
     epoch: m.board_epoch ? Number(m.board_epoch) : null,
     config: m.board_config ? JSON.parse(m.board_config) : null,
-    sync: { last_ok_at: iso(lastOk), stale: !lastOk || now() - lastOk > 2 * 60 * 60 * 1000, last_error: m.board_last_error || null },
+    sync: syncHealth(m.board_last_ok_at ? Number(m.board_last_ok_at) : null, m.board_last_error),
   };
 }
 

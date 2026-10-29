@@ -4,7 +4,7 @@
 //
 //   npm i @noble/curves@2.0.1 @noble/hashes@2.0.1
 //
-//   node voucher.mjs keygen [--out key.hex]          new voucher key (secret to the file, public key to stdout)
+//   node voucher.mjs keygen --out key.hex            new voucher key (secret to the file, public key to stdout)
 //   node voucher.mjs sign --key-file key.hex <ledger component> <lane id> <spent_cum microtari>
 //
 // A voucher authorises the provider to claim `spent_cum` (cumulative, in microtari) from the lane.
@@ -14,6 +14,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { ristretto255 } from "@noble/curves/ed25519.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 
@@ -71,7 +72,7 @@ function parseSecret(secretKeyHex) {
   return k;
 }
 
-/** Signs a voucher. Returns hex strings plus the `cbor!` argument for a `claim` manifest. */
+/** Signs a voucher. Returns its fields as strings, ready for `lanes.mjs claim`. */
 export function signVoucher(secretKeyHex, ledger, laneId, spentCum) {
   const k = parseSecret(secretKeyHex);
   const publicKey = Point.BASE.multiply(k).toBytes();
@@ -79,7 +80,7 @@ export function signVoucher(secretKeyHex, ledger, laneId, spentCum) {
   const nonce = Point.BASE.multiply(r).toBytes();
   const e = challenge(nonce, publicKey, voucherMessage(ledger, laneId, spentCum));
   const s = bigIntToLe32((r + e * k) % ORDER);
-  const voucher = {
+  return {
     ledger,
     lane_id: String(laneId),
     spent_cum: String(spentCum),
@@ -87,7 +88,6 @@ export function signVoucher(secretKeyHex, ledger, laneId, spentCum) {
     public_nonce: hex(nonce),
     signature: hex(s),
   };
-  return { ...voucher, manifest_arg: `cbor!([0, [[public_key!("${voucher.public_nonce}"), hex_bytes!("${voucher.signature}")]]])` };
 }
 
 /** Checks a voucher the way the template does, so a provider can verify before doing the work. */
@@ -115,10 +115,10 @@ function main(argv) {
   };
   if (command === "keygen") {
     const out = flag("--out");
+    if (!out) usage(); // the secret key is never printed
     const { secretKey, publicKey } = keygen();
-    if (out) writeFileSync(out, secretKey + "\n", { mode: 0o600, flag: "wx" });
-    else console.error("No --out given: printing the secret key. Store it safely.");
-    console.log(JSON.stringify(out ? { public_key: publicKey } : { public_key: publicKey, secret_key: secretKey }, null, 2));
+    writeFileSync(out, secretKey + "\n", { mode: 0o600, flag: "wx" });
+    console.log(JSON.stringify({ public_key: publicKey }, null, 2));
     return;
   }
   if (command === "sign") {
@@ -142,10 +142,10 @@ function main(argv) {
 
 function usage() {
   console.error(`Usage:
-  voucher.mjs keygen [--out key.hex]
+  voucher.mjs keygen --out key.hex
   voucher.mjs sign --key-file key.hex <ledger component> <lane id> <spent_cum microtari>   (or LANE_VOUCHER_KEY=<hex>)
   voucher.mjs verify '<voucher json>'                                                     (or the JSON on stdin)`);
   process.exit(2);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main(process.argv.slice(2));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2));
