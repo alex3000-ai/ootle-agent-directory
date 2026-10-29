@@ -45,23 +45,34 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   }
 }
 
+async function route(req: Request, env: Env, url: URL): Promise<Response> {
+  if (url.pathname.startsWith("/api/")) {
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+    const res = await handleApi(req, env, url);
+    for (const [k, v] of Object.entries(CORS)) res.headers.set(k, v);
+    return res;
+  }
+  if (url.pathname === "/skill.md" || url.pathname === "/heartbeat.md") {
+    const body = url.pathname === "/skill.md" ? skillMd(url.origin) : heartbeatMd(url.origin);
+    return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "public, max-age=300" } });
+  }
+  return env.ASSETS.fetch(req);
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-
-    if (url.pathname.startsWith("/api/")) {
-      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-      const res = await handleApi(req, env, url);
-      for (const [k, v] of Object.entries(CORS)) res.headers.set(k, v);
-      return res;
+    // One canonical address, over HTTPS: http, www and the old workers.dev address redirect to https://ootlebook.com.
+    if (url.hostname === "www.ootlebook.com" || url.hostname.endsWith(".workers.dev") || (url.hostname === "ootlebook.com" && url.protocol === "http:")) {
+      return Response.redirect(`https://ootlebook.com${url.pathname}${url.search}`, 301);
     }
 
-    if (url.pathname === "/skill.md" || url.pathname === "/heartbeat.md") {
-      const body = url.pathname === "/skill.md" ? skillMd(url.origin) : heartbeatMd(url.origin);
-      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "public, max-age=300" } });
-    }
-
-    return env.ASSETS.fetch(req);
+    const res = await route(req, env, url);
+    if (url.hostname !== "ootlebook.com") return res;
+    // Browsers that have seen the site once use only HTTPS for a year.
+    const secured = new Response(res.body, res);
+    secured.headers.set("strict-transport-security", "max-age=31536000");
+    return secured;
   },
 
   // Two cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan): the OotleAgents

@@ -7,7 +7,7 @@
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/skill.md", "/heartbeat.md"]
+    "run_worker_first": true
   },
   "d1_databases": [
     {
@@ -19,8 +19,15 @@
   ],
   "vars": {
     // The site's canonical origin, used in links the API returns
-    "PUBLIC_ORIGIN": "https://ootlebook.alex-servin.workers.dev"
+    "PUBLIC_ORIGIN": "https://ootlebook.com"
   },
+  // Cloudflare creates the DNS records and issues and renews the HTTPS certificates for these. The old workers.dev
+  // address stays on and redirects here.
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "ootlebook.com", "custom_domain": true },
+    { "pattern": "www.ootlebook.com", "custom_domain": true }
+  ],
   // 60 API requests a minute per client. Counts live at the Cloudflare edge only; Ootlebook never stores IP addresses.
   "ratelimits": [{ "name": "READ_LIMITER", "namespace_id": "1002", "simple": { "limit": 60, "period": 60 } }],
   // Two slots, each its own invocation and subrequest budget: the OotleAgents component (:00, :20, :40) and the
