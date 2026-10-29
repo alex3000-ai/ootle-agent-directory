@@ -1,28 +1,72 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { keygen, messages, publicKeyOf, signStatement, validName, verifyStatement } from "./directory.mjs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { keygen, OWNER_DOMAIN, publicKeyOf, sign, signVoucher, statements, verify, verifyVoucher, VOUCHER_DOMAIN } from "./keys.mjs";
 
-const DIR = "component_" + "ab".repeat(32);
+const HUB = "component_" + "ab".repeat(32);
 const owner = keygen(), agent = keygen();
 
-test("statements match the template's message formats", () => {
-  assert.equal(messages.register(DIR, "hexherald", agent.publicKey, "otl_esm_x"), `register|${DIR}|hexherald|${agent.publicKey}|otl_esm_x`);
-  assert.equal(messages.rotate(DIR, "hexherald", 3, agent.publicKey), `rotate|${DIR}|hexherald|3|${agent.publicKey}`);
-  assert.equal(messages.retire(DIR, "hexherald", 0), `retire|${DIR}|hexherald|0`);
-  assert.equal(messages.transfer(DIR, "hexherald", 1, owner.publicKey), `transfer|${DIR}|hexherald|1|${owner.publicKey}`);
+// The client reads its deployment from a file; point it at a made-up one.
+const RES = Object.fromEntries(["cards", "index", "posts", "follows", "listings", "lanes"].map((k, i) => [k, `resource_${String(i + 1).padStart(2, "0").repeat(32)}`]));
+const depFile = join(mkdtempSync(join(tmpdir(), "oa-")), "dep.json");
+writeFileSync(depFile, JSON.stringify({ component: HUB, resources: RES }));
+process.env.OOTLE_AGENTS_DEPLOYMENT = depFile;
+const A = await import("./agents.mjs");
+
+test("statements are the template's message formats", () => {
+  assert.equal(statements.register(HUB, "hexherald", agent.publicKey, "otl_esm_x"), `register|${HUB}|hexherald|${agent.publicKey}|otl_esm_x`);
+  assert.equal(statements.rotate(HUB, "hexherald", 3, agent.publicKey), `rotate|${HUB}|hexherald|3|${agent.publicKey}`);
+  assert.equal(statements.retire(HUB, "hexherald", 0), `retire|${HUB}|hexherald|0`);
+  assert.equal(statements.transfer(HUB, "hexherald", 1, owner.publicKey), `transfer|${HUB}|hexherald|1|${owner.publicKey}`);
+  assert.throws(() => statements.retire("component_xyz", "a", 0), /component/);
 });
 
-test("sign and verify; any change breaks the signature", () => {
-  const s = signStatement(owner.secretKey, messages.register(DIR, "hexherald", agent.publicKey));
+test("sign and verify; any change, or another domain, breaks the signature", () => {
+  const m = statements.register(HUB, "hexherald", agent.publicKey);
+  const s = sign(OWNER_DOMAIN, owner.secretKey, m);
   assert.equal(s.public_key, publicKeyOf(owner.secretKey));
-  assert.ok(verifyStatement(s));
-  assert.ok(!verifyStatement({ ...s, message: s.message.replace("hexherald", "hexherald2") }));
-  assert.ok(!verifyStatement({ ...s, public_key: agent.publicKey }));
+  assert.ok(verify(OWNER_DOMAIN, s, m));
+  assert.ok(!verify(OWNER_DOMAIN, s, m.replace("hexherald", "hexherald2")));
+  assert.ok(!verify(VOUCHER_DOMAIN, s, m));
+  assert.ok(!verify(OWNER_DOMAIN, { ...s, public_nonce: "zz" }, m), "garbage is false, not an exception");
 });
 
-test("names follow the template's rules", () => {
-  for (const ok of ["ab", "hex-herald", "agent_007", "9lives"]) assert.ok(validName(ok), ok);
-  for (const bad of ["a", "HexHerald", "-x", "has space", "x".repeat(33), "émoji"]) assert.ok(!validName(bad), bad);
+test("vouchers sign <hub>|<lane>|<spent_cum> and verify only as signed", () => {
+  const v = signVoucher(owner.secretKey, HUB, "provider.3", 5000n);
+  assert.equal(v.spent_cum, "5000");
+  assert.ok(verifyVoucher(v));
+  for (const [k, val] of [["lane", "provider.4"], ["spent_cum", "5001"], ["hub", "component_" + "cd".repeat(32)]]) assert.ok(!verifyVoucher({ ...v, [k]: val }), k);
+});
+
+test("names and entry ids follow the template's rules", () => {
+  for (const ok of ["ab", "hex-herald", "agent_007", "9lives"]) assert.ok(A.validName(ok), ok);
+  for (const bad of ["a", "HexHerald", "-x", "has space", "x".repeat(33), "émoji"]) assert.ok(!A.validName(bad), bad);
+  assert.equal(A.authorOf("hex-herald.12"), "hex-herald");
+  assert.throws(() => A.authorOf("hexherald"), /entry id/);
+});
+
+// The engine accepts a write to a substate declared read-only in a dry run, then rejects it on the network and
+// keeps the fee. Every call must declare exactly what it writes.
+test("each call declares the substates it writes as writable and the cards it reads", () => {
+  const card = (n) => `nft_${"01".repeat(32)}_str_${n}`, nft = (k, id) => `nft_${RES[k].slice(9)}_str_${id}`;
+  const w = (id) => ({ id, write: true });
+  const lane = { id: "bob.0", buyer: "alice", provider: "bob" };
+  const acct = "component_" + "ee".repeat(32);
+  const cases = {
+    setDescription: [A.calls.setDescription("alice", "x"), [w(card("alice"))]],
+    post: [A.calls.post("alice", "hi", null), [w(card("alice"))]],
+    retract: [A.calls.retract("alice.3"), [w(nft("posts", "alice.3")), card("alice")]],
+    follow: [A.calls.follow("alice", "bob"), [w(card("alice")), card("bob")]],
+    unfollow: [A.calls.unfollow("alice.0"), [w(nft("follows", "alice.0")), card("alice")]],
+    endorse: [A.calls.endorse(acct, 1, { name: "alice", subject: "bob", note: "n", epochs: 1 }), [w(card("alice")), card("bob")]],
+    renew: [A.calls.renew(acct, 1, "alice.2", 5), [w(nft("listings", "alice.2")), card("alice")]],
+    openLane: [A.calls.openLane(acct, 5, { buyer: "alice", provider: "bob", voucherKey: owner.publicKey }), [card("alice"), w(card("bob"))]],
+    claim: [A.calls.claim(acct, lane, { spent_cum: "5", public_nonce: "11".repeat(32), signature: "22".repeat(32) }), [w(nft("lanes", "bob.0")), card("bob")]],
+    refund: [A.calls.refund(acct, lane), [w(nft("lanes", "bob.0")), card("alice")]],
+  };
+  for (const [name, [call, inputs]] of Object.entries(cases)) assert.deepEqual(call.inputs, inputs, name);
 });
 
 import { callMethod, cbor, feeWithMargin, rejection, submitInstructions } from "./tx.mjs";

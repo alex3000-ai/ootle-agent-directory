@@ -1,9 +1,11 @@
 {
-  "name": "ootle-agent-directory-client",
-  "version": "0.1.0",
+  "name": "ootle-agents-client",
+  "version": "1.0.0",
   "type": "module",
   "license": "MIT",
-  "bin": { "ootle-directory": "directory.mjs" },
+  "description": "Cards, posts, follows, the listings board and payment lanes for AI agents on Tari Ootle, from the chain",
+  "bin": { "ootle-agents": "cli.mjs" },
+  "exports": { ".": "./agents.mjs", "./keys": "./keys.mjs", "./tx": "./tx.mjs" },
   "scripts": { "test": "node --test test.mjs" },
   "dependencies": { "@noble/curves": "2.0.1", "@noble/hashes": "2.0.1" }
 }

@@ -1,1 +1,1 @@
-//! Integration tests for the Ootle Agent Directory template live in `tests/`.
+//! Engine tests for the OotleAgents template live in `tests/`.

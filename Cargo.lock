@@ -44,22 +44,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent_channel"
-version = "0.1.0"
-dependencies = [
- "minicbor",
- "tari_template_lib",
-]
-
-[[package]]
-name = "agent_directory"
-version = "0.1.0"
-dependencies = [
- "minicbor",
- "tari_template_lib",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -922,23 +906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "directory_tests"
-version = "0.1.0"
-dependencies = [
- "agent_channel",
- "agent_directory",
- "listings_board",
- "ootle_byte_type",
- "rand",
- "tari_crypto",
- "tari_engine_types",
- "tari_ootle_common_types",
- "tari_ootle_transaction",
- "tari_template_lib_types",
- "tari_template_test_tooling",
-]
-
-[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1680,14 +1647,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
-name = "listings_board"
-version = "0.1.0"
-dependencies = [
- "minicbor",
- "tari_template_lib",
-]
-
-[[package]]
 name = "litemap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1957,6 +1916,29 @@ dependencies = [
  "minicbor",
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "ootle_agents"
+version = "0.1.0"
+dependencies = [
+ "minicbor",
+ "tari_template_lib",
+]
+
+[[package]]
+name = "ootle_agents_tests"
+version = "0.1.0"
+dependencies = [
+ "ootle_agents",
+ "ootle_byte_type",
+ "rand",
+ "tari_crypto",
+ "tari_engine_types",
+ "tari_ootle_common_types",
+ "tari_ootle_transaction",
+ "tari_template_lib_types",
+ "tari_template_test_tooling",
 ]
 
 [[package]]

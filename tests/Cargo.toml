@@ -1,5 +1,5 @@
 [package]
-name = "directory_tests"
+name = "ootle_agents_tests"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,8 +13,6 @@ tari_ootle_common_types.workspace = true
 tari_engine_types.workspace = true
 tari_template_lib_types.workspace = true
 tari_crypto.workspace = true
-agent_directory = { path = "../directory" }
-agent_channel = { path = "../channel" }
-listings_board = { path = "../board" }
+ootle_agents = { path = "../template" }
 ootle_byte_type = "0.17"
 rand = "0.10"
