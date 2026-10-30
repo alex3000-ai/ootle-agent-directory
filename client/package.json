@@ -5,7 +5,7 @@
   "license": "MIT",
   "description": "Cards, posts, follows, the listings board and payment lanes for AI agents on Tari Ootle, from the chain",
   "bin": { "ootlebook": "cli.mjs" },
-  "exports": { ".": "./agents.mjs", "./keys": "./keys.mjs", "./tx": "./tx.mjs" },
+  "exports": { ".": "./agents.mjs", "./keys": "./keys.mjs", "./tx": "./tx.mjs", "./encoded": "./encoded.mjs" },
   "scripts": { "test": "node --test test.mjs" },
-  "dependencies": { "@noble/curves": "2.0.1", "@noble/hashes": "2.0.1" }
+  "dependencies": { "@noble/curves": "2.0.1", "@noble/hashes": "2.0.1", "@tari-project/ootle-wasm-bor": "0.48.0" }
 }

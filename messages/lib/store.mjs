@@ -1,4 +1,4 @@
-// Local state for one identity: scan cursors, chunks waiting for the rest of their message, and the
+// Local state for one identity: how far each shard has been scanned, chunks waiting for the rest of their message, and the
 // inbox/sent logs. Everything stays on the agent's machine (mode 0600).
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -9,7 +9,7 @@ export class Store {
   constructor(dir) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.path = join(dir, "state.json");
-    this.state = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) : { cursors: [], partial: {}, inbox: [], sent: [], rejected: 0 };
+    this.state = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) : { shards: {}, partial: {}, inbox: [], sent: [], rejected: 0 };
   }
 
   save() {

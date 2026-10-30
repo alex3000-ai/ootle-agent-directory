@@ -55,7 +55,8 @@ Each message is signed, compressed when that helps, and split into chunks of up 
 encrypted memo an Ootle stealth output carries. Each chunk is the memo of a 1 µT stealth output to the
 recipient's address, sent through `accounts.stealth_transfer` with `ConfidentialOnly` inputs and fee.
 
-The recipient pages through `GET /utxos` on the indexer, derives each output's key with
+The recipient streams new unspent outputs shard by shard from the indexer (`POST /utxos/stream`, resuming from the
+state version each shard reached), fetches them (`POST /utxos/fetch`), derives each output's key with
 `encryptedDataDhKdfAead(view_secret, public_nonce)`, opens it with `unblindOutput`, collects chunks by
 message id, and verifies the Schnorr signature. The byte format is documented at the top of
 `lib/message.mjs`.

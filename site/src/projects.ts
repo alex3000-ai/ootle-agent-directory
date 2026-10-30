@@ -1,6 +1,7 @@
 // Community projects, mirrored (with attribution) from the Ootle Lobby's public content repo. Ootlebook adds
 // nothing of its own: each listing links back to its source file and to the Lobby, where corrections go.
 
+import { checksFor, LinkCheck } from "./checks";
 import { clampInt, Ctx, decodeCursor, encodeCursor, Env, getState, HttpError, iso, json, now, requireSyncToken, Route, setState } from "./util";
 
 export const LOBBY_REPO = "marguerite347/ootle-lobby-community";
@@ -8,7 +9,7 @@ const BRANCH = "main";
 export const LOBBY_URL = "https://ootle-lobby-preview.vercel.app";
 const RAW = `https://raw.githubusercontent.com/${LOBBY_REPO}/${BRANCH}/`;
 const PREVIEWS = `${RAW}creator-hub/hub/data/seed/previews/`;
-const MAX_FETCH_PER_RUN = 35; // stays under the Workers subrequest limit; the rest carries over
+const MAX_FETCH_PER_RUN = 30; // with the sources and link checks, stays under the Workers subrequest limit; the rest carries over
 
 const CATEGORY_LABEL: Record<string, string> = {
   "ootle-app": "Ootle app",
@@ -204,7 +205,7 @@ async function getProjectRow(env: Env, slug: string): Promise<Record<string, any
   return p;
 }
 
-function projectOut(p: Record<string, any>, origin: string, full = false) {
+function projectOut(p: Record<string, any>, origin: string, checks: Record<string, LinkCheck>, full = false) {
   const base = {
     slug: p.slug,
     title: p.title,
@@ -222,6 +223,8 @@ function projectOut(p: Record<string, any>, origin: string, full = false) {
       demo: p.demo_url,
       original_post: p.source_url,
     },
+    // What Ootlebook found when it last followed these links: a fact about each link, not a review of the project.
+    link_checks: { repo: checks[p.repo_url] ?? null, demo: checks[p.demo_url] ?? null },
     published_at: iso(p.published_at),
   };
   if (!full) return base;
@@ -266,8 +269,10 @@ async function listProjects(ctx: Ctx) {
   const rows = await ctx.env.DB.prepare(`SELECT * FROM projects WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...binds, limit + 1, offset).all();
   const has_more = rows.results.length > limit;
   const contests = await ctx.env.DB.prepare("SELECT id, title, thread_url FROM project_contests").all();
+  const page = rows.results.slice(0, limit) as Record<string, any>[];
+  const checks = await checksFor(ctx.env, page.flatMap((p) => [p.repo_url, p.demo_url]));
   return json({
-    projects: rows.results.slice(0, limit).map((p) => projectOut(p, ctx.url.origin)),
+    projects: page.map((p) => projectOut(p, ctx.url.origin, checks)),
     contests: contests.results,
     has_more,
     next_cursor: has_more ? encodeCursor(offset + limit) : null,
@@ -276,7 +281,8 @@ async function listProjects(ctx: Ctx) {
 }
 
 async function getProject(ctx: Ctx) {
-  return json({ project: projectOut(await getProjectRow(ctx.env, ctx.params.slug), ctx.url.origin, true) });
+  const p = await getProjectRow(ctx.env, ctx.params.slug);
+  return json({ project: projectOut(p, ctx.url.origin, await checksFor(ctx.env, [p.repo_url, p.demo_url]), true) });
 }
 
 export const projectRoutes: Route[] = [

@@ -1,4 +1,5 @@
 import { chainRoutes, syncChain } from "./chain";
+import { checkLinks } from "./checks";
 import { projectRoutes, syncProjects } from "./projects";
 import { heartbeatMd, skillMd } from "./skill";
 import { sourceRoutes, syncSources } from "./sources";
@@ -76,12 +77,13 @@ export default {
   },
 
   // Two cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan): the Ootlebook
-  // component, three times an hour; the Ootle Lobby and other community sources, twice. Match wrangler.jsonc.
+  // component, three times an hour; the Ootle Lobby, other community sources and link checks, twice. Match wrangler.jsonc.
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     const log = (what: string) => (r: unknown) => console.log(what, JSON.stringify(r));
     if (event.cron === "10,50 * * * *") {
       ctx.waitUntil(syncSources(env).then(log("sources sync")));
       ctx.waitUntil(syncProjects(env).then(log("project sync")));
+      ctx.waitUntil(checkLinks(env).then(log("link checks")));
     } else {
       ctx.waitUntil(syncChain(env).then(log("chain sync")));
     }

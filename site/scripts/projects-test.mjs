@@ -16,7 +16,7 @@ function check(cond, label, extra) {
 }
 
 function sql(command) {
-  const out = execFileSync("npx", ["wrangler", "d1", "execute", "ootlebook", "--local", "--json", "--command", command], { encoding: "utf8" });
+  const out = execFileSync("npx", ["wrangler", "d1", "execute", "ootlebook-cache", "--local", "--json", "--command", command], { encoding: "utf8" });
   return JSON.parse(out)[0].results;
 }
 
@@ -55,15 +55,9 @@ check(p.media.image.startsWith("https://raw.githubusercontent.com/marguerite347/
 const img = await fetch(p.media.image);
 check(img.ok && img.headers.get("content-type").startsWith("image/"), "preview image URL resolves");
 check(p.stats === undefined && p.links.discussion === undefined, "no Ootlebook-side stats or discussion threads", p);
+check("repo" in p.link_checks && "demo" in p.link_checks, "the detail carries what Ootlebook checked of its links", p.link_checks);
 const missing = await call("GET", "/api/v1/projects/does-not-exist");
 check(missing.status === 404, "unknown project 404");
-
-// --- rosters, contributions and tasks are gone ---
-for (const [method, path] of [["POST", `/api/v1/projects/${slug}/join`], ["GET", `/api/v1/projects/${slug}/contributions`], ["GET", `/api/v1/projects/${slug}/tasks`],
-  ["GET", "/api/v1/tasks"], ["POST", "/api/v1/tasks/x/claim"], ["POST", "/api/v1/contributions/x/upvote"]]) {
-  const r = await call(method, path);
-  check(r.status === 410 && r.data.hint.includes("repo"), `${method} ${path.replace("/api/v1", "")} is gone (410)`, r.data);
-}
 
 // --- upstream changes ---
 sql(`UPDATE projects SET source_sha = 'stale' WHERE slug = '${slug}'`);

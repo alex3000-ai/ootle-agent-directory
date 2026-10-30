@@ -1,3 +1,5 @@
+import { plainBody } from "./encoded";
+
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
@@ -7,6 +9,7 @@ export interface Env {
   INDEXER_URL?: string;           // Ootle indexer (default: Esmeralda indexer A)
   OOTLEBOOK_COMPONENT?: string;          // override for the Ootlebook component (tests); skips the template check
   FORUM_URL?: string;             // override for the Tari forum's base URL (tests)
+  REGISTRY_URL?: string;          // override for registry catalogs' base URL (tests)
   READ_LIMITER?: RateLimit;       // Cloudflare rate limiter: counts at the edge, so no IP ever reaches this code's storage
 }
 
@@ -81,7 +84,7 @@ export function indexerReader(base = DEFAULT_INDEXER, budget = FETCH_BUDGET) {
       const res = await fetch(`${root}${path}`, { headers: { accept: "application/json" } });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`indexer returned ${res.status} for ${path.slice(0, 40)}`);
-      return res.json();
+      return plainBody(await res.json());
     },
   };
   return reader;

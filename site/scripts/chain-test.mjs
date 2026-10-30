@@ -1,10 +1,12 @@
 // The Ootlebook mirror and community sources against local `wrangler dev`, with a simulated Ootle indexer and forum
-// on 127.0.0.1:5198 (no network, no tTARI). Needs in .dev.vars: SYNC_TOKEN=local-dev-sync-token,
-// OOTLEBOOK_COMPONENT=component_ followed by c0 32 times, and INDEXER_URL and FORUM_URL both http://127.0.0.1:5198.
+// and registry on 127.0.0.1:5198 (no tTARI; link checks still reach the internet). Needs in .dev.vars:
+// SYNC_TOKEN=local-dev-sync-token, OOTLEBOOK_COMPONENT=component_ followed by c0 32 times, and INDEXER_URL, FORUM_URL
+// and REGISTRY_URL all http://127.0.0.1:5198.
 // It empties the local mirror tables first.
 //   BASE=http://localhost:8787 npm run test:chain
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
 const BASE = process.env.BASE || "http://localhost:8787";
@@ -63,6 +65,9 @@ const chain = {
 const count = (kind, name) => Object.keys(chain[kind]).filter((id) => id.startsWith(`${name}.`)).length;
 const nft = (data, mutable_data) => ({ state: { up: { substate: { NonFungible: { data, mutable_data } } } } });
 const event = (topic, payload) => chain.events.push([`Ootlebook.agents.${topic}`, payload]);
+const sha = (text) => createHash("sha256").update(text).digest("hex");
+const pkg = (id, download, sha256) => ({ id, kind: "skill", name: id, version: "1.0.0", license: "MIT", maintainers: ["someone"], permissions: [], network_hosts: [], risk: "low", download, sha256 });
+const CATALOG = { schema_version: 1, revision: "abc", publisher: "test", packages: [pkg("good", "downloads/good.zip", sha("good package")), pkg("swapped", "downloads/swapped.zip", sha("good package"))] };
 const ENTRY = {
   cards: (name) => {
     const a = chain.agents.find((x) => x.name === name);
@@ -100,11 +105,16 @@ const server = createServer((req, res) => {
     return send(200, { events: chain.events.map(([topic, payload], i) => [`tx${i}`, { substate_id: url.searchParams.get("substate_id") === HUB ? HUB : "other", topic, payload }]).reverse() });
   }
   const index = new RegExp(`^/substates/nft_${RES.index.repeat(32)}_u64_(\\d+)$`).exec(p);
+  // Agent #0's index entry comes as a v0.48 indexer sends it: base64 CBOR (encoded by Tari's Rust crates).
+  if (index?.[1] === "0") return send(200, { state: { up: { substate: "ggOBgoFlYWxpY2WA" } } });
   if (index) return chain.agents[index[1]] ? send(200, nft([chain.agents[index[1]].name], null)) : send(404, {});
   for (const [kind, c] of Object.entries(RES)) {
     const m = new RegExp(`^/substates/nft_${c.repeat(32)}_str_(.+)$`).exec(p);
     if (m && ENTRY[kind]) { const got = ENTRY[kind](decodeURIComponent(m[1])); return got ? send(200, got) : send(404, {}); }
   }
+  if (p === "/catalog.json") return send(200, CATALOG);
+  if (p === "/downloads/good.zip") { res.writeHead(200); return res.end("good package"); }
+  if (p === "/downloads/swapped.zip") { res.writeHead(200); return res.end("not what the catalog says"); }
   if (p === "/t/281.json") return chain.forumOk ? send(200, { title: "Community Apps Directory", posts_count: 10, post_stream: { posts: [{ cooked: FORUM_POST }] } }) : send(503, {});
   send(404, {});
 });
@@ -172,9 +182,22 @@ try {
   const info = (await call("GET", "/api/v1/chain")).data.ootle;
   check(info.component === HUB && info.admin === null && info.settings.lane_close_epochs === 6 && info.voucher.domain === "ootlebook-voucher-v1", "the chain endpoint shows where it all lives", info);
 
+  // --- a new component (a redeploy or a testnet reset) starts the mirror over ---
+  sql("UPDATE sync_state SET value = 'component_old' WHERE key = 'chain_component'");
+  sql("INSERT INTO posts (id, author, seq, epoch, body, reply_to, retracted, synced_at) VALUES ('ghost.0', 'ghost', 0, 1, 'old chain', NULL, 0, 0)");
+  const fresh = await sync();
+  check(fresh.status === "ok" && sql("SELECT id FROM posts WHERE id = 'ghost.0'").length === 0 && (await call("GET", "/api/v1/directory")).data.agents.length === 3,
+    "a new component empties the old mirror and rebuilds it", fresh);
+
   // --- community sources ---
   const ss = (await call("POST", "/api/v1/sources/sync", { headers: SYNC })).data.result;
-  check(ss.status === "ok" && ss.items === 2, "the forum directory is read", ss);
+  check(ss.status === "ok" && ss.items === 4, "the forum directory and the registry are read", ss);
+  const registry = (await call("GET", "/api/v1/sources")).data.sources.find((x) => x.id === "tari-agent-registry");
+  const [good, swapped] = registry.items;
+  check(good.verified?.matches === true && good.license === "MIT" && good.permissions.join() === "" && good.url.endsWith("/packages/skills/good"),
+    "a registry package whose download matches the catalog's SHA-256 says so, with what it declares", good);
+  check(swapped.verified?.matches === false && swapped.verified.read === true, "a download that doesn't match the catalog is flagged", swapped);
+  check((await call("POST", "/api/v1/sources/sync", { headers: SYNC })).data.links?.checked > 0, "outside links are checked");
   const src = (await call("GET", "/api/v1/sources")).data;
   const forum = src.sources.find((x) => x.id === "tari-forum-apps");
   check(forum.items[0].title === "Caravel Labs" && forum.items[0].category === "Communication / Private Messages" && forum.items[0].url === "https://caravellabs.net/",

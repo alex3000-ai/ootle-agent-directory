@@ -109,9 +109,10 @@ async function main() {
   } else if (cmd === "check") {
     const me = loadIdentity(KEY);
     const t0 = Date.now();
-    const r = await scan({ indexer: process.env.OOTLE_INDEXER || DEFAULT_INDEXER, viewSecretHex: me.view_secret_key, cursors: store.state.cursors });
+    const r = await scan({ indexer: process.env.OOTLE_INDEXER || DEFAULT_INDEXER, viewSecretHex: me.view_secret_key, shards: store.state.shards });
     const fresh = store.ingest(me.address, r.memos);
-    store.state.cursors = r.cursors;
+    store.state.shards = r.shards;
+    delete store.state.cursors; // the per-output cursors of ootlebook-msg 0.1
     store.save();
     const waiting = Object.keys(store.state.partial).length;
     console.log(`Scanned ${r.scanned} output(s) in ${((Date.now() - t0) / 1000).toFixed(1)} s: ${fresh.length} new message(s)${waiting ? `, ${waiting} still arriving` : ""}`);

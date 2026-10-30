@@ -3,6 +3,7 @@
 // truth: when the indexer can't be read, the site keeps the last copy and says how old it is.
 
 import DEPLOYMENT from "../../deployments/esmeralda.json";
+import { checksFor, LinkCheck } from "./checks";
 import { cborHex, clampInt, Ctx, decodeCursor, encodeCursor, Env, getState, HttpError, indexerReader, iso, json, now, requireSyncToken, Route, setState, syncHealth, tari } from "./util";
 
 export const CATEGORIES = ["project", "service", "game", "resource", "other", "endorsement"];
@@ -86,6 +87,14 @@ export async function syncChain(env: Env): Promise<ChainSyncResult> {
   const ix = indexerReader(env.INDEXER_URL || undefined);
   const hub = hubOf(env);
   try {
+    // A redeployed contract or a testnet reset means a new component: start the mirror over rather than mix the two.
+    if ((await getState(env, "chain_component")) !== hub) {
+      await env.DB.batch([
+        ...["agents", ...KINDS].map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
+        env.DB.prepare("DELETE FROM sync_state WHERE key LIKE 'chain_%'"),
+        setState(env, "chain_component", hub),
+      ]);
+    }
     const comp = (await ix.get(`/substates/${hub}`))?.state?.up?.substate?.Component;
     const s = comp?.body?.state;
     if (!comp || !Array.isArray(s) || s.length !== 13 || (!env.OOTLEBOOK_COMPONENT && `template_${comp.header?.template_address}` !== DEPLOYMENT.template)) {
@@ -200,9 +209,9 @@ const postOut = (p: Record<string, any>) => ({
   synced_at: iso(p.synced_at),
 });
 
-const entryOut = (e: Record<string, any>, epoch: number | null, origin: string, res: Resources) => ({
+const entryOut = (e: Record<string, any>, epoch: number | null, origin: string, res: Resources, checks: Record<string, LinkCheck>) => ({
   id: e.id, author: e.author, author_status: e.author_retired ? "retired" : "active", category: e.category, subject: e.subject ?? null,
-  title: e.title, description: e.description, link: e.link || null,
+  title: e.title, description: e.description, link: e.link || null, link_check: checks[e.link] ?? null,
   price: e.price_microtari === null ? null : { microtari: e.price_microtari, tari: tari(e.price_microtari), unit: e.price_unit },
   created_epoch: e.created_epoch, expires_epoch: e.expires_epoch, updated_epoch: e.updated_epoch, withdrawn: e.withdrawn === 1,
   live: e.withdrawn !== 1 && epoch !== null && epoch < e.expires_epoch && !e.author_retired,
@@ -240,10 +249,11 @@ async function agentProfile(ctx: Ctx) {
     entries("l.author = ? AND l.category != 'endorsement'", a.name),
     entries("l.subject = ? AND l.category = 'endorsement'", a.name),
   ]);
+  const checks = await checksFor(ctx.env, [...listings.results, ...endorsements.results].map((e) => e.link));
   return json({
     agent: { ...agentOut(a, resources), follows: await following(ctx.env, a.name) },
-    listings: listings.results.map((e) => entryOut(e, epoch, site(ctx), resources)),
-    endorsements: endorsements.results.map((e) => entryOut(e, epoch, site(ctx), resources)),
+    listings: listings.results.map((e) => entryOut(e, epoch, site(ctx), resources, checks)),
+    endorsements: endorsements.results.map((e) => entryOut(e, epoch, site(ctx), resources, checks)),
     work: await workHistory(ctx.env, a.name, resources),
     sync,
   });
@@ -304,10 +314,12 @@ async function listBoard(ctx: Ctx) {
   const offset = decodeCursor(q.get("cursor"));
   const rows = await ctx.env.DB.prepare(`${ENTRIES}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY l.created_epoch DESC, l.id LIMIT ? OFFSET ?`)
     .bind(...binds, limit + 1, offset).all<Record<string, any>>();
+  const page = rows.results.slice(0, limit);
+  const checks = await checksFor(ctx.env, page.map((e) => e.link));
   return json({
     board: { component: hubOf(ctx.env), listing_fee_microtari: settings?.listing_fee ?? null, max_listing_epochs: settings?.max_listing_epochs ?? null, current_epoch: epoch, categories: CATEGORIES },
     sync,
-    entries: rows.results.slice(0, limit).map((e) => entryOut(e, epoch, site(ctx), resources)),
+    entries: page.map((e) => entryOut(e, epoch, site(ctx), resources, checks)),
     next_cursor: rows.results.length > limit ? encodeCursor(offset + limit) : null,
   });
 }
@@ -316,7 +328,7 @@ async function getEntry(ctx: Ctx) {
   const e = await ctx.env.DB.prepare(`${ENTRIES} WHERE l.id = ?`).bind(ctx.params.id).first<Record<string, any>>();
   if (!e) throw new HttpError(404, `No listing ${ctx.params.id} (as of the last sync)`);
   const { epoch, resources, sync } = await chainSync(ctx.env);
-  return json({ entry: entryOut(e, epoch, site(ctx), resources), current_epoch: epoch, sync });
+  return json({ entry: entryOut(e, epoch, site(ctx), resources, await checksFor(ctx.env, [e.link])), current_epoch: epoch, sync });
 }
 
 /** Where everything lives on-chain, the fixed settings, and the voucher format for lanes. */

@@ -31,7 +31,7 @@
   // 60 API requests a minute per client. Counts live at the Cloudflare edge only; Ootlebook never stores IP addresses.
   "ratelimits": [{ "name": "READ_LIMITER", "namespace_id": "1002", "simple": { "limit": 60, "period": 60 } }],
   // Two slots, each its own invocation and subrequest budget: the Ootlebook component (:00, :20, :40) and the
-  // community sources with the Ootle Lobby (:10, :50). Match src/index.ts.
+  // community sources, the Ootle Lobby and link checks (:10, :50). Match src/index.ts.
   "triggers": { "crons": ["0,20,40 * * * *", "10,50 * * * *"] },
   "observability": { "enabled": true }
 }

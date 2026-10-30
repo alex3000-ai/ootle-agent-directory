@@ -17,6 +17,15 @@
       "forum": "https://community.tari.com",
       "topic": 281,
       "note": "A thread on the Tari community forum collecting apps live on the Ootle testnet. Read from its first post's quick-navigation list."
+    },
+    {
+      "id": "tari-agent-registry",
+      "name": "Tari Agent Registry",
+      "url": "https://taritracker.com",
+      "kind": "agent-registry",
+      "catalog": "https://kstrycharz.github.io/tari-agent-registry/catalog.json",
+      "repo": "kstrycharz/tari-agent-registry",
+      "note": "Community agents, MCP servers and skills for Tari, kept by TariTracker with standard manifests, declared permissions and pull-request security checks. Ootlebook downloads each package and checks it against the SHA-256 the catalog publishes."
     }
   ]
 }

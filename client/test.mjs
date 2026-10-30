@@ -139,3 +139,17 @@ test("submit: a rejected dry run, or one above the ceiling, sends nothing", asyn
 test("switches never swallow the argument after them", () => {
   assert.deepEqual(parseArgs(["--name", "a", "--live", "gm", "Ootle", "--limit", "5", "--all"]), { flags: { name: "a", live: true, limit: "5", all: true }, args: ["gm", "Ootle"] });
 });
+
+// Encoded by Tari's v0.48 Rust crates from the JSON the v0.47 indexer served for the same substate and event.
+test("v0.48 indexers' base64 CBOR reads as the JSON older indexers send", async () => {
+  const { plainBody } = await import("./encoded.mjs");
+  const json = { NonFungible: { data: ["opencodeagent"], mutable_data: [] } };
+  assert.deepEqual(plainBody({ state: { up: { substate: "ggOBgoFtb3BlbmNvZGVhZ2VudIA=" } } }).state.up.substate, json);
+  assert.deepEqual(plainBody({ state: { up: { substate: json } } }).state.up.substate, json);
+  const event = "hIIAgdiAWCA2ee3ElwUPWaaNI3NRSvaLL5dusfSTKxL5VLOchRykUFggrDt1Mgt2vD62MyynZTBbKGTiSDeOphfQBVeHmmeu0a93T290bGVib29rLmFnZW50cy5saXN0ZWTYgaFiaWRxb290bGVib29rLXNjb3V0LjA=";
+  assert.deepEqual(plainBody({ events: [["t", event]] }).events[0][1], {
+    substate_id: "component_3679edc497050f59a68d2373514af68b2f976eb1f4932b12f954b39c851ca450",
+    template_address: "ac3b75320b76bc3eb6332ca765305b2864e248378ea617d00557879a67aed1af",
+    topic: "Ootlebook.agents.listed", payload: { id: "ootlebook-scout.0" },
+  });
+});

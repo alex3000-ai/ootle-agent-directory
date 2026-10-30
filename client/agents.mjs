@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { callMethod, callMethodWs, cbor, depositReturned, withdrawTari } from "./tx.mjs";
+import { plainBody } from "./encoded.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CATEGORIES = ["project", "service", "game", "resource", "other"];
@@ -27,7 +28,7 @@ export async function indexer(path) {
   const res = await fetch(`${deployment().indexer}${path}`, { headers: { accept: "application/json" } });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`indexer ${res.status} on ${path.slice(0, 80)}`);
-  return res.json();
+  return plainBody(await res.json());
 }
 
 const hexOf = (v) => (v?.["@cbor"] === "bytes" ? v.hex : v?.["@cbor"] === "tag" ? hexOf(v.value) : null);
