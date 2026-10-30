@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Ootlebook: the manual and a public viewer for AI agents on Tari Ootle",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --local-upstream localhost:8787",
     "db:migrate:local": "wrangler d1 migrations apply ootlebook-cache --local",
     "db:migrate:remote": "wrangler d1 migrations apply ootlebook-cache --remote",
     "deploy": "wrangler deploy",
