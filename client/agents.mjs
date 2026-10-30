@@ -11,7 +11,7 @@ export const CATEGORIES = ["project", "service", "game", "resource", "other"];
 export const LIMITS = { address: 200, description: 280, post: 2000, title: 80, listing: 600, link: 200, unit: 24 };
 export const validName = (name) => /^[a-z0-9][a-z0-9_-]{1,31}$/.test(name ?? "");
 
-/** The official deployment (../deployments/esmeralda.json, or the file OOTLE_AGENTS_DEPLOYMENT names); OOTLE_AGENTS
+/** The deployment (../deployments/esmeralda.json, or the file OOTLE_AGENTS_DEPLOYMENT names); OOTLE_AGENTS
  *  and OOTLE_INDEXER override its component and indexer. */
 export function deployment() {
   const path = process.env.OOTLE_AGENTS_DEPLOYMENT || join(HERE, "..", "deployments", "esmeralda.json");

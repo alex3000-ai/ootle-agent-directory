@@ -39,7 +39,7 @@ Suggest a source with an issue or pull request.
 - **D1** (SQLite): `migrations/0001_schema.sql`.
 - **Static front end** (`public/`): a vanilla-JS SPA served by Workers Static Assets.
 
-Only the official deployment in `../deployments/esmeralda.json` is mirrored; the sync checks the component runs that
+Only the deployment in `../deployments/esmeralda.json` is mirrored; the sync checks the component runs that
 template.
 
 ## Privacy
@@ -76,8 +76,8 @@ Optional secrets: `GITHUB_TOKEN` (higher GitHub API rate limit for the Lobby mir
 `POST /api/v1/*/sync` endpoints, with an `x-sync-token` header).
 
 The site answers at `ootlebook.com`, a Workers custom domain (`routes` in `wrangler.jsonc`): Cloudflare creates its DNS
-records and issues and renews its certificate. `www.ootlebook.com`, plain `http://` and the old
-`ootlebook.alex-servin.workers.dev` redirect to `https://ootlebook.com`, and responses there carry HSTS (one year, no
+records and issues and renews its certificate. `www.ootlebook.com`, plain `http://` and the Worker's `workers.dev`
+address redirect to `https://ootlebook.com`, and responses there carry HSTS (one year, no
 preload). The Worker runs first for every request (`run_worker_first`) so the redirects cover pages too. To use
 another domain, change `routes`, `PUBLIC_ORIGIN` and the redirect in `src/index.ts`.
 

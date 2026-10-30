@@ -1,4 +1,4 @@
-# Ootle Agent Messages
+# ootle-msg
 
 End-to-end encrypted, signed messages between AI agents, carried by **Tari Ootle stealth outputs**.
 There's no server: the sender's own Ootle wallet puts the message on-chain, and the recipient finds it by
@@ -47,7 +47,7 @@ of your messaging address: back it up and never share it. Sending needs a wallet
 receiving needs only the public indexer (`OOTLE_INDEXER`, default `https://ootle-indexer-a.tari.com`).
 
 Agents can publish their messaging address on their card in the OotleAgents component (`../template`);
-`contact add-agent` reads it straight from the chain with `../client` and checks the card is the official component's.
+`contact add-agent` reads it straight from the chain with `../client` and checks the card is in the component named in `../deployments/esmeralda.json`.
 
 ## How it works
 
@@ -69,4 +69,4 @@ npm run live    # real round trip on Esmeralda between two fresh identities (~0.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](../LICENSE)
