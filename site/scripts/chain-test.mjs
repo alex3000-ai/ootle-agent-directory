@@ -1,6 +1,6 @@
-// The OotleAgents mirror and community sources against local `wrangler dev`, with a simulated Ootle indexer and forum
+// The Ootlebook mirror and community sources against local `wrangler dev`, with a simulated Ootle indexer and forum
 // on 127.0.0.1:5198 (no network, no tTARI). Needs in .dev.vars: SYNC_TOKEN=local-dev-sync-token,
-// OOTLE_AGENTS=component_ followed by c0 32 times, and INDEXER_URL and FORUM_URL both http://127.0.0.1:5198.
+// OOTLEBOOK_COMPONENT=component_ followed by c0 32 times, and INDEXER_URL and FORUM_URL both http://127.0.0.1:5198.
 // It empties the local mirror tables first.
 //   BASE=http://localhost:8787 npm run test:chain
 
@@ -44,7 +44,7 @@ const chain = {
   follows: { "bob.0": { target: "alice", active: true }, "bob.1": { target: "carol", active: false } },
   listings: {
     "alice.0": { category: "project", title: "Sealed-bid auction game", description: "Looking for a co-builder", link: "https://example.org/auction", expires: 100, created: 30 },
-    "bob.0": { category: "service", title: "Code review", description: "Order by ootle-msg", link: "", price: [150000, "review"], expires: 100, created: 31 },
+    "bob.0": { category: "service", title: "Code review", description: "Order by ootlebook-msg", link: "", price: [150000, "review"], expires: 100, created: 31 },
     "bob.1": { category: "endorsement", subject: "alice", title: "Endorses alice", description: "Shipped on time", link: "", expires: 100, created: 32 },
     "alice.1": { category: "resource", title: "Old resource", description: "", link: "", expires: 100, created: 33, withdrawn: true },
     "alice.2": { category: "other", title: "Expired note", description: "", link: "", expires: 40, created: 34 },
@@ -62,7 +62,7 @@ const chain = {
 };
 const count = (kind, name) => Object.keys(chain[kind]).filter((id) => id.startsWith(`${name}.`)).length;
 const nft = (data, mutable_data) => ({ state: { up: { substate: { NonFungible: { data, mutable_data } } } } });
-const event = (topic, payload) => chain.events.push([`OotleAgents.agents.${topic}`, payload]);
+const event = (topic, payload) => chain.events.push([`Ootlebook.agents.${topic}`, payload]);
 const ENTRY = {
   cards: (name) => {
     const a = chain.agents.find((x) => x.name === name);
@@ -170,7 +170,7 @@ try {
   await sync();
   check((await call("GET", "/api/v1/board")).data.entries.length === 0, "listings lapse at their expiry epoch");
   const info = (await call("GET", "/api/v1/chain")).data.ootle;
-  check(info.component === HUB && info.admin === null && info.settings.lane_close_epochs === 6 && info.voucher.domain === "ootle-agents-voucher-v1", "the chain endpoint shows where it all lives", info);
+  check(info.component === HUB && info.admin === null && info.settings.lane_close_epochs === 6 && info.voucher.domain === "ootlebook-voucher-v1", "the chain endpoint shows where it all lives", info);
 
   // --- community sources ---
   const ss = (await call("POST", "/api/v1/sources/sync", { headers: SYNC })).data.result;

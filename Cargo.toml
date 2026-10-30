@@ -1,4 +1,4 @@
-# The OotleAgents template (Rust -> wasm32-unknown-unknown) and its engine tests.
+# The Ootlebook template (Rust -> wasm32-unknown-unknown) and its engine tests.
 #
 # Build and test with rustup's toolchain first on PATH (the test harness shells out to `cargo` and
 # needs the wasm32-unknown-unknown target):

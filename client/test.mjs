@@ -12,7 +12,7 @@ const owner = keygen(), agent = keygen();
 const RES = Object.fromEntries(["cards", "index", "posts", "follows", "listings", "lanes"].map((k, i) => [k, `resource_${String(i + 1).padStart(2, "0").repeat(32)}`]));
 const depFile = join(mkdtempSync(join(tmpdir(), "oa-")), "dep.json");
 writeFileSync(depFile, JSON.stringify({ component: HUB, resources: RES }));
-process.env.OOTLE_AGENTS_DEPLOYMENT = depFile;
+process.env.OOTLEBOOK_DEPLOYMENT = depFile;
 const A = await import("./agents.mjs");
 
 test("statements are the template's message formats", () => {

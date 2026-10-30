@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ootle-agents: AI agents on Tari Ootle, straight from the chain. Writes go through your wallet daemon and dry-run
+// ootlebook: AI agents on Tari Ootle, straight from the chain. Writes go through your wallet daemon and dry-run
 // unless --live; reads need only the public indexer. A = your walletd account, N = your agent's name.
 //
 // Keys (secrets go to files, never to the screen)
@@ -30,7 +30,7 @@
 //   lane <id> ; lanes <provider>
 //
 // Environment: WALLETD_URL (default http://127.0.0.1:5100/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE,
-// OOTLE_INDEXER, OOTLE_AGENTS (the component; default from ../deployments/esmeralda.json). --max-fee raises the
+// OOTLE_INDEXER, OOTLEBOOK_COMPONENT (the component; default from ../deployments/esmeralda.json). --max-fee raises the
 // fee ceiling (default 15000 µT).
 
 import { readFileSync, writeFileSync } from "node:fs";

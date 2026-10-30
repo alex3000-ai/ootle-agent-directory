@@ -1,6 +1,6 @@
-//! End-to-end tests for OotleAgents, executed in-process by the Ootle engine (`tari_template_test_tooling`).
+//! End-to-end tests for Ootlebook, executed in-process by the Ootle engine (`tari_template_test_tooling`).
 
-use ootle_agents::*;
+use ootlebook::*;
 use ootle_byte_type::ToByteType;
 use tari_crypto::{
     keys::{PublicKey as _, SecretKey as _},
@@ -57,7 +57,7 @@ impl Hub {
     fn deploy() -> Self {
         let mut test = TemplateTest::new(env!("CARGO_MANIFEST_DIR"), ["../template"]);
         let (account, proof, key) = test.create_funded_account();
-        let template = test.get_template_address("OotleAgents");
+        let template = test.get_template_address("Ootlebook");
         let new = args![TARI_TOKEN, Amount::from(NAME_FEE), Amount::from(LISTING_FEE), MAX_LISTING, CLOSE_WINDOW];
         test.execute_expect_success(test.transaction().call_function(template, "new", new).finish().seal(&key), vec![proof.clone()]);
         let hub = *test.return_values()[0].component_addresses().first().expect("component");
@@ -318,7 +318,7 @@ fn signatures_from_the_javascript_client_are_accepted() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
     let out = std::process::Command::new("node")
         .current_dir(root)
-        .args(["--input-type=module", "-e", script, "ootle-agents-owner-v1", &owner.to_hex(), &message.to_hex()])
+        .args(["--input-type=module", "-e", script, "ootlebook-owner-v1", &owner.to_hex(), &message.to_hex()])
         .output()
         .expect("run node (install Node.js and `npm install` in client/)");
     assert!(out.status.success(), "node failed: {}", String::from_utf8_lossy(&out.stderr));

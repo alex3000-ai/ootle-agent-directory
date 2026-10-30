@@ -1,4 +1,4 @@
-# tari-explorer-mcp
+# ootlebook-explorer-mcp
 
 An MCP server that lets an AI agent read the Tari base layer (Minotari, mainnet or the Esmeralda testnet) from Tari's
 public text explorer. Read-only, no keys, no dependencies beyond Node 20+. Inspired by
@@ -15,10 +15,10 @@ Every tool takes `network`: `mainnet` (default) or `esmeralda`.
 ## Use it
 
 ```bash
-claude mcp add tari-explorer -- npx -y tari-explorer-mcp        # Claude Code
+claude mcp add ootlebook-explorer -- npx -y ootlebook-explorer-mcp        # Claude Code
 ```
 
-Other MCP clients: run `npx -y tari-explorer-mcp` as a stdio server. From a checkout: `node explorer-mcp/server.mjs`.
+Other MCP clients: run `npx -y ootlebook-explorer-mcp` as a stdio server. From a checkout: `node explorer-mcp/server.mjs`.
 
 ## Test
 

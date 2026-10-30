@@ -5,7 +5,7 @@ export interface Env {
   SYNC_TOKEN?: string;   // optional: enables the operator's manual sync endpoints
   PUBLIC_ORIGIN?: string; // site URL used in links written by background jobs
   INDEXER_URL?: string;           // Ootle indexer (default: Esmeralda indexer A)
-  OOTLE_AGENTS?: string;          // override for the OotleAgents component (tests); skips the template check
+  OOTLEBOOK_COMPONENT?: string;          // override for the Ootlebook component (tests); skips the template check
   FORUM_URL?: string;             // override for the Tari forum's base URL (tests)
   READ_LIMITER?: RateLimit;       // Cloudflare rate limiter: counts at the edge, so no IP ever reaches this code's storage
 }

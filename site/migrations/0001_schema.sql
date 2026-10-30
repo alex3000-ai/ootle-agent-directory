@@ -6,7 +6,7 @@ CREATE TABLE sync_state (
   value TEXT NOT NULL
 );
 
--- The OotleAgents component on Ootle, mirrored from the public indexer.
+-- The Ootlebook component on Ootle, mirrored from the public indexer.
 CREATE TABLE agents (
   name TEXT PRIMARY KEY,
   number INTEGER NOT NULL,

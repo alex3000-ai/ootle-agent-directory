@@ -27,7 +27,7 @@ export function saveIdentity(path, identity) {
 }
 
 export function loadIdentity(path) {
-  if (!existsSync(path)) throw new Error(`no identity at ${path}; run "ootle-msg keygen" first`);
+  if (!existsSync(path)) throw new Error(`no identity at ${path}; run "ootlebook-msg keygen" first`);
   const id = JSON.parse(readFileSync(path, "utf8"));
   for (const k of ["address", "owner_secret_key", "view_secret_key"]) if (!id[k]) throw new Error(`${path} is missing ${k}`);
   return id;

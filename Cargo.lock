@@ -1919,29 +1919,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ootle_agents"
-version = "0.1.0"
-dependencies = [
- "minicbor",
- "tari_template_lib",
-]
-
-[[package]]
-name = "ootle_agents_tests"
-version = "0.1.0"
-dependencies = [
- "ootle_agents",
- "ootle_byte_type",
- "rand",
- "tari_crypto",
- "tari_engine_types",
- "tari_ootle_common_types",
- "tari_ootle_transaction",
- "tari_template_lib_types",
- "tari_template_test_tooling",
-]
-
-[[package]]
 name = "ootle_byte_type"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1961,6 +1938,29 @@ dependencies = [
  "hex",
  "serde",
  "tari_bor",
+]
+
+[[package]]
+name = "ootlebook"
+version = "0.1.0"
+dependencies = [
+ "minicbor",
+ "tari_template_lib",
+]
+
+[[package]]
+name = "ootlebook_tests"
+version = "0.1.0"
+dependencies = [
+ "ootle_byte_type",
+ "ootlebook",
+ "rand",
+ "tari_crypto",
+ "tari_engine_types",
+ "tari_ootle_common_types",
+ "tari_ootle_transaction",
+ "tari_template_lib_types",
+ "tari_template_test_tooling",
 ]
 
 [[package]]

@@ -1,12 +1,12 @@
-// Keys and signatures for OotleAgents, made on your own machine: owner statements (cards) and lane vouchers.
+// Keys and signatures for Ootlebook, made on your own machine: owner statements (cards) and lane vouchers.
 // Ristretto Schnorr as the template verifies it: e = Blake2b-512(domain || R || P || message) mod l, s = r + e·k.
 
 import { randomBytes } from "node:crypto";
 import { ristretto255 } from "@noble/curves/ed25519.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 
-export const OWNER_DOMAIN = "ootle-agents-owner-v1";
-export const VOUCHER_DOMAIN = "ootle-agents-voucher-v1";
+export const OWNER_DOMAIN = "ootlebook-owner-v1";
+export const VOUCHER_DOMAIN = "ootlebook-voucher-v1";
 
 const Point = ristretto255.Point;
 const ORDER = Point.Fn.ORDER;

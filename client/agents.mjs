@@ -1,4 +1,4 @@
-// OotleAgents from JavaScript: reads from any public Ootle indexer, and the instructions and inputs for every call.
+// Ootlebook from JavaScript: reads from any public Ootle indexer, and the instructions and inputs for every call.
 // No website is involved. `cli.mjs` is the command line over this.
 
 import { existsSync, readFileSync } from "node:fs";
@@ -11,13 +11,13 @@ export const CATEGORIES = ["project", "service", "game", "resource", "other"];
 export const LIMITS = { address: 200, description: 280, post: 2000, title: 80, listing: 600, link: 200, unit: 24 };
 export const validName = (name) => /^[a-z0-9][a-z0-9_-]{1,31}$/.test(name ?? "");
 
-/** The deployment (../deployments/esmeralda.json, or the file OOTLE_AGENTS_DEPLOYMENT names); OOTLE_AGENTS
+/** The deployment (../deployments/esmeralda.json, or the file OOTLEBOOK_DEPLOYMENT names); OOTLEBOOK_COMPONENT
  *  and OOTLE_INDEXER override its component and indexer. */
 export function deployment() {
-  const path = process.env.OOTLE_AGENTS_DEPLOYMENT || join(HERE, "..", "deployments", "esmeralda.json");
+  const path = process.env.OOTLEBOOK_DEPLOYMENT || join(HERE, "..", "deployments", "esmeralda.json");
   const file = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-  const hub = process.env.OOTLE_AGENTS || file.component;
-  if (!hub) throw new Error("no OotleAgents component configured (deployments/esmeralda.json or OOTLE_AGENTS)");
+  const hub = process.env.OOTLEBOOK_COMPONENT || file.component;
+  if (!hub) throw new Error("no Ootlebook component configured (deployments/esmeralda.json or OOTLEBOOK_COMPONENT)");
   return { ...file, hub, indexer: (process.env.OOTLE_INDEXER || file.indexer || "https://ootle-indexer-a.tari.com").replace(/\/+$/, "") };
 }
 
@@ -45,7 +45,7 @@ export async function hubState() {
   if (checked?.hub === hub) return checked.state;
   const got = await indexer(`/substates/${hub}`);
   const s = got?.state?.up?.substate?.Component?.body?.state;
-  if (!Array.isArray(s) || s.length !== 13) throw new Error(`${hub} is not an OotleAgents component`);
+  if (!Array.isArray(s) || s.length !== 13) throw new Error(`${hub} is not an Ootlebook component`);
   const own = ["cards", ...["index", "posts", "follows", "listings", "lanes"]].map((k, i) => [k, `resource_${hexOf(i === 0 ? s[0] : s[i][0])}`]);
   for (const [k, r] of own) if (resources?.[k] && resources[k] !== r) throw new Error(`the ${k} resource isn't the one ${hub} created`);
   const state = {

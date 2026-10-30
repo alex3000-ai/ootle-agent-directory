@@ -1,10 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.alex3000-ai/tari-explorer",
+  "name": "io.github.alex3000-ai/ootlebook-explorer",
   "description": "Read the Tari base layer (Minotari): chain tip, blocks and miners' coinbase data. Read-only.",
   "repository": { "url": "https://github.com/alex3000-ai/ootlebook", "source": "github", "subfolder": "explorer-mcp" },
   "version": "1.0.0",
   "packages": [
-    { "registryType": "npm", "identifier": "tari-explorer-mcp", "version": "1.0.0", "transport": { "type": "stdio" } }
+    { "registryType": "npm", "identifier": "ootlebook-explorer-mcp", "version": "1.0.0", "transport": { "type": "stdio" } }
   ]
 }

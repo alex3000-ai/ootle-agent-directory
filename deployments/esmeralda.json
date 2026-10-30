@@ -1,13 +1,13 @@
 {
   "network": "esmeralda",
   "indexer": "https://ootle-indexer-a.tari.com",
-  "template": "template_9824a0a202a993c73050836f2530140cb47dc53283d24c2ca90b834639accfb1",
+  "template": "template_ac3b75320b76bc3eb6332ca765305b2864e248378ea617d00557879a67aed1af",
   "transactions": {
-    "publish": "c6487dbd92a8dbc181a02874c76fe1a8a66862fd31956abc48e9b3470481f5ad",
-    "create": "8db9ae4164a89c6db6ba83c46c78a2eb289e19742606055d3058ca427e4dd9be"
+    "publish": "9795c038823962cf507caa31414c44d222bf84cd80a4c4e2a5aa5959c76dd4b0",
+    "create": "49adb438ff5150b2379b7c4b5635cedf81b5e667bd35689d079dc07d60a7d767"
   },
-  "deployed": "2026-10-29",
-  "component": "component_c47e639ab0887efa6d4c8ecda02c3d90ea96e5688378255b763b3e5fd5cdc076",
+  "deployed": "2026-10-30",
+  "component": "component_3679edc497050f59a68d2373514af68b2f976eb1f4932b12f954b39c851ca450",
   "payment_resource": "resource_0101010101010101010101010101010101010101010101010101010101010101",
   "settings": {
     "name_fee": "10000000",
@@ -16,11 +16,11 @@
     "lane_close_epochs": "6"
   },
   "resources": {
-    "cards": "resource_c4c15daa89acd218da80117d439f7e1a3a52467270114f79e419a37ae0121a8b",
-    "index": "resource_c426b8cba5787caa3c6aef1a3f6da4f3e165fb0df9d75dce2a0b31fa33048680",
-    "posts": "resource_c4764d559d50b462d70e517f89ffa5699921f4dca53e7393f2c73c11eb16363c",
-    "follows": "resource_c46cb8d4882e4baf540231fb47f12fc1c5a9439b633f9efabaa5b036d54e40e2",
-    "listings": "resource_c44d6ce45b10a9c422592ff6de6c6b3588f85daacf1e2482a01ee219e5857d72",
-    "lanes": "resource_c442953187aeb14602e58b81356d25f11887887417a93e7e172c60c626d83da6"
+    "cards": "resource_36d42e4895aa9fa6769cc74b823037d59fa0497baa78d5bb5adcaed85ee9a7d7",
+    "index": "resource_36fd3120b4acbd12ec268c0cc66cbcf0482fb0a4e7bfa3ee86e68c6dc1f6400f",
+    "posts": "resource_36d757b537c5e0027f6f7507d654a1049a5881382fa143357aec22484a6b0469",
+    "follows": "resource_36c1057b2acfbb41914a0c57cceaf5f237d1939a5ce3c5ef6876e99d2894f267",
+    "listings": "resource_36a109a9001c6664ae7c0bb4bd7a77ce5283eb2e43b79a011b3363ce61b52ba6",
+    "lanes": "resource_3671a1f94c1c2c5e12f449df47539b009574b681002d83c62a7fe58071e749aa"
   }
 }

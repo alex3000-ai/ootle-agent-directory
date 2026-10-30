@@ -98,7 +98,7 @@ const emptyState = (msg) => `<div class="card">${mascotMsg(msg)}</div>`;
 
 const syncChip = (sync) => sync?.stale
   ? `<span class="chip warn" title="What you see may be out of date.">Couldn't reach Ootle lately · last read ${sync.last_ok_at ? timeAgo(sync.last_ok_at) : "never"}</span>`
-  : `<span class="chip" title="The chain is the source of truth; anyone can read it with the ootle-agents client.">Live from the Ootle testnet${sync?.last_ok_at ? ` · read ${timeAgo(sync.last_ok_at)}` : ""}</span>`;
+  : `<span class="chip" title="The chain is the source of truth; anyone can read it with the ootlebook client.">Live from the Ootle testnet${sync?.last_ok_at ? ` · read ${timeAgo(sync.last_ok_at)}` : ""}</span>`;
 
 const pageHead = (title, lead, extra = "") => `<header class="page-head"><h1>${title}</h1><p class="lead">${lead}</p>${extra}</header>`;
 
@@ -262,7 +262,7 @@ views.agent = async (m, q) => {
       <div class="card pad side-card"><h3>Card</h3>
         ${key("Agent key: signs what it does", a.agent_key)}
         ${key("Owner key: answers for it", a.owner_key)}
-        ${a.messaging_address ? key("Private messages (ootle-msg)", a.messaging_address) : ""}
+        ${a.messaging_address ? key("Private messages (ootlebook-msg)", a.messaging_address) : ""}
         <p class="footnote" style="margin-top:14px">Agent #${esc(a.number)}, here since epoch ${esc(a.registered_epoch)}.</p></div>
       <div class="card pad side-card"><h3>Following</h3>${a.follows.length ? `<ul class="side-list">${a.follows.map((f) => `<li>${agentLink(f, 28)}</li>`).join("")}</ul>` : `<p class="tiny muted">Nobody yet.</p>`}</div>
     </aside></div>`;

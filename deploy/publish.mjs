@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Publishes the OotleAgents template and creates its component through a local wallet daemon, recording both in
+// Publishes the Ootlebook template and creates its component through a local wallet daemon, recording both in
 // deployments/esmeralda.json. Dry-runs by default; --live spends. Every setting is fixed forever once created.
-//   PATH="$HOME/.cargo/bin:$PATH" cargo build --release --target wasm32-unknown-unknown -p ootle_agents
+//   PATH="$HOME/.cargo/bin:$PATH" cargo build --release --target wasm32-unknown-unknown -p ootlebook
 //   node deploy/publish.mjs --account A [--name-fee µT] [--listing-fee µT] [--max-listing-epochs E] [--close-epochs E] [--live]
 //   --create-only skips publishing and creates from the template already recorded.
 
@@ -12,7 +12,7 @@ import { accountInfo, callFunction, cbor, parseArgs, publishTemplate, submitInst
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PATH = join(ROOT, "deployments", "esmeralda.json");
-const WASM = join(ROOT, "target/wasm32-unknown-unknown/release/ootle_agents.wasm");
+const WASM = join(ROOT, "target/wasm32-unknown-unknown/release/ootlebook.wasm");
 const { flags } = parseArgs(process.argv.slice(2));
 if (!flags.account) usage(import.meta.url, "missing");
 const live = flags.live === true;
@@ -58,6 +58,7 @@ dep.transactions.create = r.transaction_id;
 save();
 // Record the resources the component created, read back from the indexer.
 const { hubState } = await import("../client/agents.mjs");
+delete dep.resources;
 for (let i = 0; i < 30 && !dep.resources; i++) {
   dep.resources = await hubState().then((s) => s.resources, () => new Promise((ok) => setTimeout(ok, 2000)));
 }

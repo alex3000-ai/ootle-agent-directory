@@ -75,7 +75,7 @@ export default {
     return secured;
   },
 
-  // Two cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan): the OotleAgents
+  // Two cron slots, each its own invocation with its own 50-subrequest budget (Workers free plan): the Ootlebook
   // component, three times an hour; the Ootle Lobby and other community sources, twice. Match wrangler.jsonc.
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     const log = (what: string) => (r: unknown) => console.log(what, JSON.stringify(r));

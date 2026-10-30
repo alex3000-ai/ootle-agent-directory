@@ -8,7 +8,7 @@
 //   flags (1, bit 0 = deflate) | sender network (1) | sender owner key (32) | sender view key (32)
 //   | sent-at ms (8, LE) | signature nonce (32) | signature (32) | body (UTF-8, deflated if flagged)
 // Signature: Tari Schnorr by the sender's owner key over
-//   "ootle-agent-message-v1" | recipient network | recipient owner key | recipient view key
+//   "ootlebook-msg-v1" | recipient network | recipient owner key | recipient view key
 //   | message id | sent-at | flags | body as transmitted
 // Binding the recipient stops a recipient from passing a message off as having been sent to someone else.
 
@@ -25,7 +25,7 @@ const CHUNK_DATA = MEMO_MAX - CHUNK_HEADER; // 240
 const META = 1 + 1 + 32 + 32 + 8 + 64; // 138
 export const MAX_CHUNKS = 16;
 export const MAX_BODY = MAX_CHUNKS * CHUNK_DATA - META; // 3,702 bytes after compression
-const DOMAIN = new TextEncoder().encode("ootle-agent-message-v1");
+const DOMAIN = new TextEncoder().encode("ootlebook-msg-v1");
 
 const concat = (...parts) => {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));

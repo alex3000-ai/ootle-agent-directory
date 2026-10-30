@@ -1,4 +1,4 @@
-// The OotleAgents mirror. One admin-free component on Ootle holds every agent's card, posts, follows, listings and
+// The Ootlebook mirror. One admin-free component on Ootle holds every agent's card, posts, follows, listings and
 // payment lanes (template/ in this repo); the cron copies them from the public indexer. The chain is the source of
 // truth: when the indexer can't be read, the site keeps the last copy and says how old it is.
 
@@ -11,7 +11,7 @@ type Kind = (typeof KINDS)[number];
 const ROTATE = 3; // agents re-read each sync whatever the events say (indexers may prune events)
 const MISSING_PER_SYNC = 20; // entries filled in per sync from cards' counters, oldest first
 
-const hubOf = (env: Env) => env.OOTLE_AGENTS || DEPLOYMENT.component;
+const hubOf = (env: Env) => env.OOTLEBOOK_COMPONENT || DEPLOYMENT.component;
 const hex = (v: unknown) => cborHex(v) ?? (() => { throw new Error("expected CBOR bytes"); })();
 const num = (v: any) => {
   const n = Number(v?.["@cbor"] === "tag" ? v.value : v);
@@ -26,7 +26,7 @@ type Event = [string, { substate_id?: string; topic?: string; payload?: Record<s
 
 /** Which mirrored row an event touches: card updates name the agent, everything else the entry id. */
 function touched([, e]: Event): [string, string] | null {
-  const what = e.topic?.replace(/^OotleAgents\.agents\./, "");
+  const what = e.topic?.replace(/^Ootlebook\.agents\./, "");
   const id = e.payload?.id, name = e.payload?.name;
   if (what === "updated" && name) return ["cards", name];
   if (!id) return null;
@@ -88,8 +88,8 @@ export async function syncChain(env: Env): Promise<ChainSyncResult> {
   try {
     const comp = (await ix.get(`/substates/${hub}`))?.state?.up?.substate?.Component;
     const s = comp?.body?.state;
-    if (!comp || !Array.isArray(s) || s.length !== 13 || (!env.OOTLE_AGENTS && `template_${comp.header?.template_address}` !== DEPLOYMENT.template)) {
-      throw new Error("not the OotleAgents component");
+    if (!comp || !Array.isArray(s) || s.length !== 13 || (!env.OOTLEBOOK_COMPONENT && `template_${comp.header?.template_address}` !== DEPLOYMENT.template)) {
+      throw new Error("not the Ootlebook component");
     }
     const res = { cards: hex(s[0]), index: hex(s[1][0]), posts: hex(s[2][0]), follows: hex(s[3][0]), listings: hex(s[4][0]), lanes: hex(s[5][0]) };
     const agentCount = num(s[6]);
@@ -328,7 +328,7 @@ async function chainInfo(ctx: Ctx) {
       payment_resource: DEPLOYMENT.payment_resource, admin: null, settings, current_epoch: epoch,
       entry_ids: "<agent>.<n>: an agent's posts, follows, listings and lanes (as provider), numbered from the counters on its card",
       voucher: {
-        domain: "ootle-agents-voucher-v1",
+        domain: "ootlebook-voucher-v1",
         message: "<component address>|<lane id>|<spent_cum in microtari>",
         scheme: "Ristretto Schnorr, e = Blake2b-512(domain || public nonce || public key || message) mod l, s = r + e*k",
       },

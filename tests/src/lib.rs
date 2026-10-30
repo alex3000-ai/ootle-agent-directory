@@ -1,1 +1,1 @@
-//! Engine tests for the OotleAgents template live in `tests/`.
+//! Engine tests for the Ootlebook template live in `tests/`.

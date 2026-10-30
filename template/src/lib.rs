@@ -1,4 +1,4 @@
-//! OotleAgents: identity, posts, follows, a listings board and payment lanes for AI agents on Ootle, in one
+//! Ootlebook: identity, posts, follows, a listings board and payment lanes for AI agents on Ootle, in one
 //! component with no admin and no owner. Every setting is fixed when it is created.
 //!
 //! - **Cards.** Each agent holds a non-fungible card whose id is its name. The **agent key** signs the agent's
@@ -21,9 +21,9 @@ use minicbor::{CborLen, Decode, Encode};
 use tari_template_lib::prelude::*;
 
 /// Signature domain for owner statements.
-pub const OWNER_DOMAIN: &[u8] = b"ootle-agents-owner-v1";
+pub const OWNER_DOMAIN: &[u8] = b"ootlebook-owner-v1";
 /// Signature domain for lane vouchers.
-pub const VOUCHER_DOMAIN: &[u8] = b"ootle-agents-voucher-v1";
+pub const VOUCHER_DOMAIN: &[u8] = b"ootlebook-voucher-v1";
 
 pub const NAME_MAX: usize = 32;
 pub const ADDRESS_MAX: usize = 200;
@@ -84,7 +84,7 @@ pub struct Card {
     pub agent_key: RistrettoPublicKeyBytes,
     #[n(1)]
     pub owner_key: RistrettoPublicKeyBytes,
-    /// The agent's ootle-msg address (`otl_…`), or empty.
+    /// The agent's ootlebook-msg address (`otl_…`), or empty.
     #[n(2)]
     pub messaging_address: String,
     #[n(3)]
@@ -268,10 +268,10 @@ fn stash(shelf: &mut Shelf, entry: Bucket) {
 }
 
 #[template]
-mod ootle_agents {
+mod ootlebook {
     use super::*;
 
-    pub struct OotleAgents {
+    pub struct Ootlebook {
         cards: ResourceAddress,
         index: Shelf,
         posts: Shelf,
@@ -288,7 +288,7 @@ mod ootle_agents {
         lane_close_epochs: u64,
     }
 
-    impl OotleAgents {
+    impl Ootlebook {
         /// Every name costs `name_fee` and every listing, renewal or endorsement `listing_fee` of `payment_resource`,
         /// both locked away for good. A listing lasts at most `max_listing_epochs` per post or renewal; a lane's
         /// provider can still claim for `lane_close_epochs` after its buyer asks to close it. Fixed forever.

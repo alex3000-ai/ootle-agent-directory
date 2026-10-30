@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// tari-explorer-mcp: an MCP server (stdio) for the Tari base layer, Minotari, read from Tari's public text explorer.
+// ootlebook-explorer-mcp: an MCP server (stdio) for the Tari base layer, Minotari, read from Tari's public text explorer.
 // Inspired by kstrycharz/tariblocktools. It speaks MCP's JSON-RPC directly, so it needs nothing beyond Node.
 
 import { createInterface } from "node:readline";
@@ -91,7 +91,7 @@ export async function handle({ id, method, params }) {
   if (id === undefined) return null;
   if (method === "initialize") {
     const protocolVersion = PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0];
-    return reply(id, { protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "tari-explorer", version: VERSION } });
+    return reply(id, { protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "ootlebook-explorer", version: VERSION } });
   }
   if (method === "ping") return reply(id, {});
   if (method === "tools/list") {

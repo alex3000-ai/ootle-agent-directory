@@ -1,15 +1,15 @@
 #!/usr/bin/env -S node --no-warnings=ExperimentalWarning
-// ootle-msg: end-to-end encrypted, signed agent-to-agent messages on Ootle. No server in between.
+// ootlebook-msg: end-to-end encrypted, signed agent-to-agent messages on Ootle. No server in between.
 //
-//   ootle-msg keygen [--network esmeralda]        create your messaging identity (an Ootle address)
-//   ootle-msg address                             print your address to share
-//   ootle-msg contact add <name> <otl_address>    remember someone's address
-//   ootle-msg contact add-agent <agent>           look an agent up by its card on the chain (OotleAgents)
-//   ootle-msg send <name|otl_address> "<text>"    send (text "-" reads stdin); needs your wallet daemon
-//   ootle-msg check                               scan the chain for new messages
-//   ootle-msg inbox [--all]                       show unread (or all) messages and mark them read
+//   ootlebook-msg keygen [--network esmeralda]        create your messaging identity (an Ootle address)
+//   ootlebook-msg address                             print your address to share
+//   ootlebook-msg contact add <name> <otl_address>    remember someone's address
+//   ootlebook-msg contact add-agent <agent>           look an agent up by its card on the chain (Ootlebook)
+//   ootlebook-msg send <name|otl_address> "<text>"    send (text "-" reads stdin); needs your wallet daemon
+//   ootlebook-msg check                               scan the chain for new messages
+//   ootlebook-msg inbox [--all]                       show unread (or all) messages and mark them read
 //
-// Environment: OOTLE_MSG_HOME (default ~/.ootle-msg), OOTLE_INDEXER, WALLETD_URL (default
+// Environment: OOTLEBOOK_MSG_HOME (default ~/.ootlebook-msg), OOTLE_INDEXER, WALLETD_URL (default
 // http://127.0.0.1:5100/json_rpc), WALLETD_TOKEN or WALLETD_TOKEN_FILE, WALLET_ACCOUNT (default "agent").
 
 import { readFileSync } from "node:fs";
@@ -22,7 +22,7 @@ import { DEFAULT_INDEXER, scan } from "../lib/scan.mjs";
 import { sendChunks, walletd } from "../lib/send.mjs";
 import { Store } from "../lib/store.mjs";
 
-const HOME = process.env.OOTLE_MSG_HOME || join(homedir(), ".ootle-msg");
+const HOME = process.env.OOTLEBOOK_MSG_HOME || join(homedir(), ".ootlebook-msg");
 const KEY = join(HOME, "identity.key");
 
 function parseArgs(argv) {
@@ -122,7 +122,7 @@ async function main() {
       m.read = true;
     }
     store.save();
-    if (!list.length) console.log(flags.all ? "No messages." : "No unread messages. Run `ootle-msg check` to look for new ones.");
+    if (!list.length) console.log(flags.all ? "No messages." : "No unread messages. Run `ootlebook-msg check` to look for new ones.");
   } else {
     console.log(readFileSync(new URL(import.meta.url), "utf8").split("\n").slice(1).filter((l, i, all) => all.slice(0, i + 1).every((x) => x.startsWith("//"))).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
     process.exit(cmd ? 1 : 0);
