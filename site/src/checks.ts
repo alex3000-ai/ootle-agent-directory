@@ -10,13 +10,20 @@ const UA = "Ootlebook link check (+https://github.com/alex3000-ai/ootlebook)";
 export interface LinkCheck { ok: boolean; status: number | null; checked_at: string | null; license?: string | null; archived?: boolean; pushed_at?: string | null }
 
 const githubRepo = (url: string) => /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(url);
+// GitHub refuses its web pages to Workers, so a folder in a repo is checked through the API as well.
+const githubFolder = (url: string) => /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/tree\/([\w.-]+)\/([\w./-]+?)\/?$/.exec(url);
 
 async function check(env: Env, url: string): Promise<{ ok: boolean; status: number | null; detail: string | null }> {
-  const repo = githubRepo(url);
+  const repo = githubRepo(url), folder = githubFolder(url);
+  const headers: Record<string, string> = { "user-agent": UA, accept: "application/vnd.github+json" };
+  if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
   try {
+    if (folder) {
+      const res = await fetch(`https://api.github.com/repos/${folder[1]}/${folder[2]}/contents/${folder[4]}?ref=${folder[3]}`, { headers, signal: AbortSignal.timeout(8000) });
+      await res.body?.cancel();
+      return { ok: res.ok, status: res.status, detail: null };
+    }
     if (repo) {
-      const headers: Record<string, string> = { "user-agent": UA, accept: "application/vnd.github+json" };
-      if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
       const res = await fetch(`https://api.github.com/repos/${repo[1]}/${repo[2]}`, { headers, signal: AbortSignal.timeout(8000) });
       const r = res.ok ? ((await res.json()) as any) : null;
       return { ok: !!r && !r.private, status: res.status,

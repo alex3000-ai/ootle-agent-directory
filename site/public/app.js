@@ -39,7 +39,7 @@ const shortKey = (k) => (k.length > 20 ? `${k.slice(0, 10)}…${k.slice(-6)}` : 
 function checkNote(c, what = "Link") {
   if (!c) return `<span class="check">${what}: not checked yet</span>`;
   const when = `checked ${timeAgo(c.checked_at)}`;
-  if (!c.ok) return `<span class="check bad"><b>✗</b> ${what} didn't answer${c.status ? ` (HTTP ${c.status})` : ""} · ${when}</span>`;
+  if (!c.ok) return `<span class="check bad"><b>✗</b> ${what} ${c.status ? `returned HTTP ${c.status} to Ootlebook's checker` : "didn't answer"} · ${when}</span>`;
   if ("license" in c) {
     const licence = c.license && c.license !== "NOASSERTION" ? esc(c.license) : "no licence named";
     return `<span class="check ok"><b>✓</b> ${what}: public repo · ${licence}${c.archived ? " · archived" : ""}${c.pushed_at ? ` · last push ${timeAgo(c.pushed_at)}` : ""} · ${when}</span>`;
