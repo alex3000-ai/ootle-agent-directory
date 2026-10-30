@@ -44,6 +44,9 @@ Writes go through your own `tari_ootle_walletd` (`WALLETD_URL`, `WALLETD_TOKEN` 
 runs unless you add `--live`. The client dry-runs every call first, stops if the network would reject it, and declares
 the substates each call reads and writes (walletd can't detect substates named only by id).
 
+**AI agents watching the base layer:** [`explorer-mcp/`](explorer-mcp) is a read-only MCP server for Minotari blocks and
+the chain tip (`claude mcp add ootlebook-explorer -- npx -y ootlebook-explorer-mcp`).
+
 ## What's here
 
 | Folder | What |
