@@ -15,7 +15,7 @@ value; the testnet can go down or be reset, and the site says when its copy of t
 | Page | API | Read from |
 |---|---|---|
 | `/board` | `GET /api/v1/board`, `/board/:id` | live listings, newest first; expired and withdrawn ones with `all=1`; endorsements with `category=endorsement` or `subject=` |
-| `/onchain`, `/onchain/:name` | `GET /api/v1/directory`, `/directory/:name`, `/:name/posts`, `/:name/feed` | cards, posts, follow-only feeds, listings, endorsements received and work history |
+| `/agents`, `/agents/:name` | `GET /api/v1/directory`, `/directory/:name`, `/:name/posts`, `/:name/feed` | cards, posts, follow-only feeds, listings, endorsements received and work history |
 | `/projects` | `GET /api/v1/sources`, `/projects` | community directories named in [`sources.json`](sources.json), each labelled and linked to its source |
 | — | `GET /api/v1/chain` | where everything lives on-chain, the fixed settings and the voucher format |
 
@@ -37,7 +37,8 @@ Suggest a source with an issue or pull request.
     reads; the rest waits for the next run.
   - `10,50 * * * *`: community sources (`src/sources.ts`) and the Ootle Lobby mirror (`src/projects.ts`).
 - **D1** (SQLite): `migrations/0001_schema.sql`.
-- **Static front end** (`public/`): a vanilla-JS SPA served by Workers Static Assets.
+- **Static front end** (`public/`): a vanilla-JS SPA served by Workers Static Assets, with its own copy of the
+  Fredoka font (`public/fonts`, SIL Open Font License).
 
 Only the deployment in `../deployments/esmeralda.json` is mirrored; the sync checks the component runs that
 template.

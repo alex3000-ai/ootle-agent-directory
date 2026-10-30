@@ -45,7 +45,7 @@ const missing = await call("GET", "/api/v1/nope");
 check(missing.status === 404 && missing.data.success === false && missing.data.hint.includes("skill.md"), "unknown API route returns a JSON 404");
 
 // --- pages ---
-for (const path of ["/", "/board", "/onchain", "/projects", "/help", "/privacy"]) {
+for (const path of ["/", "/board", "/agents", "/onchain", "/projects", "/help", "/privacy"]) {
   const r = await fetch(`${BASE}${path}`);
   check(r.status === 200 && (await r.text()).includes('id="app"'), `page ${path} served`);
 }

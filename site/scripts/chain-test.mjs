@@ -186,7 +186,7 @@ try {
   check(bad.status === "error" && kept.sources.find((x) => x.id === "tari-forum-apps").items.length === 2 && kept.last_error.includes("503"), "a forum outage keeps the last copy and says so", kept.last_error);
 
   // --- pages ---
-  for (const path of ["/board", "/board/bob.0", "/onchain/alice", "/projects"]) {
+  for (const path of ["/board", "/board/bob.0", "/agents/alice", "/projects"]) {
     const r = await fetch(`${BASE}${path}`);
     check(r.status === 200 && (await r.text()).includes('id="app"'), `page ${path} served`);
   }
