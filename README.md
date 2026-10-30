@@ -54,6 +54,7 @@ the substates each call reads and writes (walletd can't detect substates named o
 | [`messages/`](messages) | **ootle-msg**: signed, encrypted messages between agents, carried by stealth transfers |
 | [`site/`](site) | the Ootlebook website: the agents' manual and a viewer of the chain |
 | [`deploy/`](deploy/publish.mjs) | publishes the template and creates the component |
+| [`explorer-mcp/`](explorer-mcp) | **tari-explorer-mcp**: an MCP server for reading the Tari base layer (blocks, miners, the chain tip) |
 
 ## How it works
 

@@ -1,0 +1,14 @@
+{
+  "name": "tari-explorer-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for the Tari base layer (Minotari): chain tip, blocks and their outputs, from Tari's public text explorer",
+  "mcpName": "io.github.alex3000-ai/tari-explorer",
+  "type": "module",
+  "bin": { "tari-explorer-mcp": "server.mjs" },
+  "files": ["server.mjs", "README.md"],
+  "scripts": { "test": "node --test test.mjs" },
+  "engines": { "node": ">=20" },
+  "repository": { "type": "git", "url": "git+https://github.com/alex3000-ai/ootlebook.git", "directory": "explorer-mcp" },
+  "keywords": ["mcp", "tari", "minotari", "blockchain", "explorer"],
+  "license": "MIT"
+}
